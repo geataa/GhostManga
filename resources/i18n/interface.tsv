@@ -1,0 +1,77 @@
+# key|Turkish|English
+MyLibrary|Kütüphanem|My library
+Cards|Kartlar|Cards
+RemoveFromList|Listeden kaldır|Remove from list
+RemoveGroup|Grubu listeden kaldır|Remove group from list
+RemoveSource|Bu kaynağı listeden kaldır|Remove this source from list
+Read|Oku|Read
+Chapters|Bölümler|Chapters
+AllChapters|Tüm Bölümler (Geçmiş ve Okunmamış)|All chapters (read and unread)
+Resume|Kaldığın Yerden Oku|Resume reading
+StartReading|Okumaya Başla|Start reading
+ReadFirst|İlk Bölüm (Bölüm 1)|Read first chapter
+ReadLatest|En Son Çıkan Bölüm|Read latest chapter
+MarkAllRead|Son Sayıya Kadar Okundu|Mark all as read
+ResetReading|Okumayı Sıfırla|Reset reading
+RemoveSeries|Bu Seriyi Kütüphaneden Kaldır|Remove series from library
+OtherSources|Başka kaynaklarda ara|Search other sources
+Back|Geri|Back
+Retry|Yeniden Dene|Retry
+Cancel|Vazgeç|Cancel
+Delete|Sil|Delete
+Clear|Temizle|Clear
+Stop|Durdur|Stop
+SearchAll|Tümünde Ara|Search all sources
+AddLibrary|Kütüphane|Add to library
+OpenMenu|Menüyü aç|Open menu
+HiddenSites|Gizlenenler|Hidden sites
+Hide|Gizle|Hide
+Show|Göster|Show
+Languages|Diller|Languages
+All|Tümü|All
+CheckAccess|Erişimi denetle|Check access
+StopCheck|Denetimi durdur|Stop checking
+Check|Denetle|Check
+SiteSearch|Site adı, adres veya dil ara...|Search site name, address or language...
+OpenWebsite|Siteyi aç ↗|Open website ↗
+Unknown|Bilinmiyor|Unknown
+NotReadYet|Henüz okunmadı|Not read yet
+ReadStatus|Okundu|Read
+UnreadStatus|Okunmadı|Unread
+LatestLabel|En yeni: |Latest: 
+LastReadingLabel|Son okuma: |Last read: 
+LastUpdateLabel|Son güncelleme: |Last update: 
+LatestShort|En Yeni|Latest
+SourcesHeading|Mevcut Kaynaklar ve Aynalar:|Available sources:
+SourcesFollowing| Farklı Kaynak / Ayna Takip Ediliyor| sources followed
+DownloadDate|İndirme zamanı|Download date
+FileDate|Dosya tarihi|File date
+Local|Yerel|Local
+Refresh|Yenile|Refresh
+StartWindows|Windows başlangıcında çalıştır|Run at Windows startup
+StartWindowsHint|Oturum açıldığında sistem tepsisinde başlar.|Starts in the tray when you sign in.
+Daily|Günde bir|Once a day
+HoursUnit| saat| hours
+MinutesUnit| dk| min
+ScheduleHint|Denetim zamanı saklanır. Süresi geçmişse açılıştan 30 saniye sonra kontrol edilir.|The check time is saved. Overdue checks start 30 seconds after launch.
+DeleteLocalConfirm|Bu yerel bölüm ve içeriği Geri Dönüşüm Kutusu'na taşınsın mı?|Move this local chapter and its contents to the Recycle Bin?
+NoHiddenSites|Bu filtrelerle gizlenen site yok.|No hidden sites match these filters.
+NoFilteredSites|Bu filtrelerle eşleşen site yok.|No sites match these filters.
+NoAccessCheck|Erişim henüz denetlenmedi|Access not checked yet
+Accessible|Erişiliyor • HTTP |Accessible • HTTP 
+AccessFailed|Otomatik erişim yok: |Automatic access failed: 
+ModuleActive| • Kaynak modülü aktif| • Source module enabled
+ModuleDisabled| • Kaynak modülü devre dışı| • Source module disabled
+LastCheck|Son denetim: |Last check: 
+Checking|Denetleniyor: |Checking: 
+Successful|başarılı|successful
+SourceHealth|Kaynak Durumu|Source status
+OnlyFailures|Yalnız Hatalar|Failures only
+AllChecks|Tüm Denetimler|All checks
+OpenLogs|Log Klasörünü Aç|Open logs folder
+LocalSearch|Yerel mangalarda ara...|Search local manga...
+ChapterSearch|Bölüm ara...|Search chapters...
+MangaSearch|Manga adı yaz...|Enter manga title...
+EmptyLocal|Henüz yerel manga yok.|No local manga yet.
+LocalChapterCount| yerel bölüm • En son indirilenler üstte| local chapters • Latest downloads first
+AccessNote| site • Ana sayfa erişimi ve kaynak işlemleri ayrı denetlenir| sites • Homepage access and source operations are checked separately

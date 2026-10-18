@@ -1,0 +1,54 @@
+# Build outputs & binaries
+/bin/
+/build/
+/GhostManga.exe
+/Release/
+/Debug/
+/x64/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.ipdb
+*.iobj
+*.tlog
+
+# Private user data, internal docs, cookies, reading list, caches & logs
+/docs/
+/portable_data/
+*.bak
+*.bozuk-*
+cookies.json
+library.json
+settings.ini
+source_status.json
+scan.timestamp
+*.log
+
+# Scratch, temporary & IDE files
+/scratch/
+__pycache__/
+*.pyc
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+.env
+.env.*
+
+# Lexbor intermediate CMake build files (keep prebuilt Release static lib & headers)
+/third_party/lexbor/build/*
+!/third_party/lexbor/build/Release/
+/third_party/lexbor/build/Release/*
+!/third_party/lexbor/build/Release/lexbor_static.lib
+/third_party/lexbor/benchmarks/
+/third_party/lexbor/examples/
+/third_party/lexbor/test/
+/third_party/lexbor/images/
+/third_party/lexbor/packaging/
+/third_party/lexbor/wasm/
