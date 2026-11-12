@@ -1239,6 +1239,22 @@ void LibraryView::DrawSeriesList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, S
                 m_chDropdownScroll = 0.0f;
                 m_chDropdownSortAsc = false;
                 m_chDropdownNeedsScrollToCurrent = true;
+                if (const Series* s = lib.FindSeries(row.key); s && !s->chapters.empty()) {
+                    std::lock_guard<std::mutex> lock(m_chapterMutex);
+                    auto& cache = m_chapterCache[row.key];
+                    if (cache.chapters.empty()) {
+                        cache.mirror = row.mirror;
+                        cache.mangaUrl = row.mangaUrl;
+                        for (const auto& ch : s->chapters) {
+                            ChapterItem ci;
+                            ci.title = ch.title;
+                            ci.url = ch.url;
+                            cache.chapters.push_back(std::move(ci));
+                        }
+                        cache.loading = false;
+                        cache.failed = false;
+                    }
+                }
                 FetchChaptersForManga(row.key, row.mirror, row.mangaUrl, row.lastChapterUrl, host);
             }
             host.Invalidate();
@@ -1283,7 +1299,16 @@ void LibraryView::DrawSeriesList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, S
             host.Invalidate();
         }
         ui.Tip(Id("lib.row.allrd", rowKeyHash), i18n::Literal(L"Son Çıkan Sayıya Kadar Okundu İşaretle"), markAllRc);
-        tagsLeft = markAllRc.left - 8.0f * s;
+        tagsLeft = markAllRc.left - 4.0f * s;
+
+        // 3d. Varsayilan Tarayicida Ac Butonu (🌐)
+        const D2D1_RECT_F webRowRc = RcWH(tagsLeft - actBtnW, by, actBtnW, btnH);
+        if (w::IconButton(r, ui, Id("lib.row.web", rowKeyHash), webRowRc, Icon::Globe, 15.0f * s, i18n::Literal(L"Varsayılan Sistem Tarayıcısında Aç ↗"))) {
+            actionClicked = true;
+            const std::wstring targetUrl = !row.mangaUrl.empty() ? FromUtf8(row.mangaUrl) : row.openUrl;
+            if (!targetUrl.empty()) host.OpenUrl(targetUrl);
+        }
+        tagsLeft = webRowRc.left - 8.0f * s;
 
         // 4. Guncelleme Hatasi Alindiysa Tatli Bir Uyari Rozeti (Kullanici istegi)
         if (row.updateFailed || HasUpdateError(row.key)) {
@@ -1994,39 +2019,36 @@ void LibraryView::DrawEmpty(Renderer& r, Ui& ui, const D2D1_RECT_F& area, ShellH
 void LibraryView::FetchChaptersForManga(const std::string& key, const std::string& mirror, const std::string& mangaUrl, const std::string& lastChapUrl, ShellHost& host) {
     if (m_stopping) return;
     auto buildChapterItems = [](const std::vector<std::pair<std::string, std::string>>& rawPairs, const std::string& lastChap) -> std::vector<ChapterItem> {
-        std::vector<ChapterItem> items;
-        items.reserve(rawPairs.size());
+        std::vector<Chapter> norm;
+        norm.reserve(rawPairs.size());
+        for (const auto& p : rawPairs) norm.push_back({ p.first, p.second });
+        NormalizeChapters(norm);
 
+        std::vector<ChapterItem> items;
+        items.reserve(norm.size());
+
+        const std::string lastId = ChapterUrlIdentity(lastChap);
         int curIdx = -1;
-        for (int i = 0; i < (int)rawPairs.size(); ++i) {
-            if (!lastChap.empty() && rawPairs[i].second == lastChap) {
+        for (int i = 0; i < (int)norm.size(); ++i) {
+            if (!lastId.empty() && ChapterUrlIdentity(norm[i].url) == lastId) {
                 curIdx = i;
                 break;
             }
         }
 
-        bool isDescending = true;
-        if (rawPairs.size() >= 2) {
-            double numFirst = ParseChapterNumber(rawPairs.front().first);
-            double numLast = ParseChapterNumber(rawPairs.back().first);
-            if (numFirst >= 0 && numLast >= 0 && numFirst < numLast) {
-                isDescending = false; // 1, 2, 3...
-            }
-        }
-
         double curNum = -1.0;
         if (curIdx >= 0) {
-            curNum = ParseChapterNumber(rawPairs[curIdx].first);
+            curNum = ParseChapterNumber(norm[curIdx].title);
         }
 
-        for (int i = 0; i < (int)rawPairs.size(); ++i) {
+        for (int i = 0; i < (int)norm.size(); ++i) {
             ChapterItem ci;
-            ci.title = rawPairs[i].first;
-            ci.url = rawPairs[i].second;
+            ci.title = norm[i].title;
+            ci.url = norm[i].url;
             ci.isCurrent = (i == curIdx);
 
             if (curIdx >= 0) {
-                ci.isRead = isDescending ? (i >= curIdx) : (i <= curIdx);
+                ci.isRead = (i >= curIdx);
             } else if (curNum >= 0.0) {
                 double num = ParseChapterNumber(ci.title);
                 ci.isRead = (num >= 0.0 && num <= curNum);
@@ -2195,7 +2217,12 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
         if(w::IconButton(r,ui,Id("card.ch.remove"),removeRc,Icon::Trash,17*s,i18n::Text(L"Listeden kaldır"))) {
             const auto key=row.key;host.DeleteSeriesFromLibrary(key);m_selectedRowIndex=-1;m_cardMode=0;m_rowsRev=0;m_displayDirty=true;host.Invalidate();return;
         }
-        const float tr = removeRc.left - 12.0f * s;
+        const auto openWebHeaderRc = RcWH(removeRc.left - 34 * s, closeRc.top, 26 * s, 26 * s);
+        if (w::IconButton(r, ui, Id("card.ch.openweb"), openWebHeaderRc, Icon::Globe, 16 * s, i18n::Literal(L"Mangayı Varsayılan Sistem Tarayıcısında Aç ↗"))) {
+            const std::wstring targetUrl = !row.mangaUrl.empty() ? FromUtf8(row.mangaUrl) : row.openUrl;
+            if (!targetUrl.empty()) host.OpenUrl(targetUrl);
+        }
+        const float tr = openWebHeaderRc.left - 12.0f * s;
         const float titleW = r.MeasureText(row.title, 16.0f * s, Renderer::Weight::Bold);
         const float badgeWidth=row.mirror.empty()?0:r.MeasureText(FromUtf8(row.mirror),11*s,Renderer::Weight::Semibold)+14*s;
         const float badgeSpace=std::min(std::max(0.0f,(tr-tx)*0.4f),badgeWidth+8*s);
@@ -2257,6 +2284,7 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
         if (pickTab >= 0 && pickTab != m_chapterFilterTab) {
             m_chapterFilterTab = pickTab;
             m_chapterScroll = 0.0f;
+            m_chapterNeedsScrollToCurrent = true;
         }
 
         const float sortW = 95.0f * s;
@@ -2286,6 +2314,24 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
             std::lock_guard<std::mutex> lock(m_chapterMutex);
             auto it = m_chapterCache.find(row.key);
             if (it != m_chapterCache.end()) cacheCopy = it->second;
+        }
+
+        if (cacheCopy.chapters.empty() && detailSeries && !detailSeries->chapters.empty()) {
+            std::lock_guard<std::mutex> lock(m_chapterMutex);
+            auto& cache = m_chapterCache[row.key];
+            if (cache.chapters.empty()) {
+                cache.mirror = row.mirror;
+                cache.mangaUrl = row.mangaUrl;
+                for (const auto& ch : detailSeries->chapters) {
+                    ChapterItem ci;
+                    ci.title = ch.title;
+                    ci.url = ch.url;
+                    cache.chapters.push_back(std::move(ci));
+                }
+                cache.loading = false;
+                cache.failed = false;
+            }
+            cacheCopy = cache;
         }
 
         if (cacheCopy.chapters.empty()) {
@@ -2346,19 +2392,34 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
                 const float totalH = (float)displayChapters.size() * pitch - gap;
                 m_chapterMaxScroll = std::max(0.0f, totalH - listH);
 
-                // En son okunan bolumun pozisyonuna gore acilma (Kullanici istegi)
+                // En son okunan bolumun pozisyonuna gore acilma; hic okunmamissa 1. bolume odaklanma
                 if (m_chapterNeedsScrollToCurrent) {
                     m_chapterNeedsScrollToCurrent = false;
+                    const std::string lastId = ChapterUrlIdentity(row.lastChapterUrl);
                     int curIdx = -1;
                     for (size_t ci = 0; ci < displayChapters.size(); ++ci) {
-                        if (displayChapters[ci]->isCurrent || (!row.lastChapterUrl.empty() && displayChapters[ci]->url == row.lastChapterUrl)) {
+                        if (displayChapters[ci]->isCurrent || (!lastId.empty() && ChapterUrlIdentity(displayChapters[ci]->url) == lastId)) {
                             curIdx = (int)ci;
                             break;
                         }
                     }
+                    if (curIdx < 0 && !row.lastChapterUrl.empty() && !row.chapterLabel.empty()) {
+                        const double targetNum = ChapterNumber(ToUtf8(row.chapterLabel), row.lastChapterUrl);
+                        if (targetNum >= 0.0) {
+                            for (size_t ci = 0; ci < displayChapters.size(); ++ci) {
+                                if ( std::abs(ChapterNumber(displayChapters[ci]->title, displayChapters[ci]->url) - targetNum) < 0.001 ) {
+                                    curIdx = (int)ci;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     if (curIdx >= 0) {
-                        float targetY = (float)curIdx * pitch - (listH * 0.45f);
+                        float targetY = (float)curIdx * pitch - (listH * 0.42f);
                         m_chapterScroll = std::clamp(targetY, 0.0f, m_chapterMaxScroll);
+                    } else {
+                        // Hic okunmamis manga: ilk sayiya (Bolum 1) otomatik odaklan
+                        m_chapterScroll = m_chapterSortAsc ? 0.0f : m_chapterMaxScroll;
                     }
                 }
                 m_chapterScroll = std::clamp(m_chapterScroll, 0.0f, m_chapterMaxScroll);
@@ -2390,12 +2451,22 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
                     const float btnH = 26.0f * s;
                     const float by = itemRc.top + (itemH - btnH) * 0.5f;
 
+                    // Varsayilan tarayicida ac butonu (🌐)
+                    const float webBtnW = 26.0f * s;
+                    bx -= webBtnW;
+                    const D2D1_RECT_F webBtnRc = RcWH(bx, by, webBtnW, btnH);
+                    const bool webClicked = (RcH(hitRc) >= btnH * 0.7f) && w::IconButton(r, ui, Id("card.ch.web", (uint32_t)ci), webBtnRc, Icon::Globe, 14.5f * s, i18n::Literal(L"Bu bölümü varsayılan tarayıcıda aç ↗"));
+                    if (webClicked) {
+                        if (!ch.url.empty()) host.OpenUrl(FromUtf8(ch.url));
+                    }
+                    bx -= 6.0f * s;
+
                     // Oku butonu
                     const float rdW = 72.0f * s;
                     bx -= rdW;
                     const D2D1_RECT_F rdRc = RcWH(bx, by, rdW, btnH);
                     const bool readClicked = (RcH(hitRc) >= btnH * 0.7f) && w::TextButton(r, ui, Id("card.ch.rd", (uint32_t)ci), rdRc, i18n::Literal(L"⚡ Oku"), true);
-                    if (readClicked || rowClicked) {
+                    if (!webClicked && (readClicked || rowClicked)) {
 
                         host.OpenOnlineManga(cacheCopy.mirror.empty() ? row.mirror : cacheCopy.mirror,
                                              cacheCopy.mangaUrl.empty() ? row.mangaUrl : cacheCopy.mangaUrl,
@@ -2505,6 +2576,12 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
     if (w::TextButton(r, ui, Id("card.other"), RcWH(card.left+24*s, y,202*s,28*s), i18n::Literal(L"Başka kaynaklarda ara"), false)) {
         const auto title=row.title; host.DispatchUI([this,title,&host](){SearchOtherSources(title,host);}); return;
     }
+    const D2D1_RECT_F openWebMode0Rc = RcWH(card.left + 234.0f * s, y, 175.0f * s, 28.0f * s);
+    if (w::TextButton(r, ui, Id("card.openweb"), openWebMode0Rc, i18n::Literal(L"🌐 Tarayıcıda Aç ↗"), false)) {
+        const std::wstring targetUrl = !row.mangaUrl.empty() ? FromUtf8(row.mangaUrl) : row.openUrl;
+        if (!targetUrl.empty()) host.OpenUrl(targetUrl);
+    }
+    ui.Tip(Id("card.openweb"), i18n::Literal(L"Mangayı varsayılan sistem tarayıcısında aç"), openWebMode0Rc);
     y += 36*s;
     // Cizgi
     r.Line(card.left + 24.0f * s, y, card.right - 24.0f * s, y, theme::Border, 1.0f * s, 0.4f);
@@ -2752,14 +2829,20 @@ void LibraryView::DrawRowChapterDropdown(Renderer& r, Ui& ui, const D2D1_RECT_F&
     const float pad = 12.0f * s;
     float curY = dropY + pad;
 
-    // Baslik & Kaynak Rozeti
+    // Baslik & Kaynak Rozeti & Varsayilan Tarayicida Ac
     const float titleH = 22.0f * s;
-    const float maxTitleW = dropW - pad * 2.0f - 80.0f * s;
+    const float webBtnSz = 22.0f * s;
+    const D2D1_RECT_F dropWebRc = RcWH(dropX + dropW - pad - webBtnSz, curY, webBtnSz, webBtnSz);
+    if (w::IconButton(r, ui, Id("chdrop.openweb"), dropWebRc, Icon::Globe, 14.5f * s, i18n::Literal(L"Mangayı Varsayılan Sistem Tarayıcısında Aç ↗"))) {
+        const std::wstring targetUrl = !m_chDropdownRow.mangaUrl.empty() ? FromUtf8(m_chDropdownRow.mangaUrl) : m_chDropdownRow.openUrl;
+        if (!targetUrl.empty()) host.OpenUrl(targetUrl);
+    }
+    const float maxTitleW = dropW - pad * 2.0f - 108.0f * s;
     r.Text(m_chDropdownRow.title, RcWH(dropX + pad, curY, maxTitleW, titleH), theme::Text, 14.0f * s, Renderer::Align::Left, Renderer::Weight::Bold);
     if (!m_chDropdownRow.mirror.empty()) {
         const float bH = 18.0f * s;
         const float bW = r.MeasureText(FromUtf8(m_chDropdownRow.mirror), 10.0f * s, Renderer::Weight::Semibold) + 12.0f * s;
-        DrawMirrorBadge(r, m_chDropdownRow.mirror, RcWH(dropX + dropW - pad - bW, curY + 2.0f * s, bW, bH), s);
+        DrawMirrorBadge(r, m_chDropdownRow.mirror, RcWH(dropWebRc.left - 6.0f * s - bW, curY + 2.0f * s, bW, bH), s);
     }
     curY += titleH + 8.0f * s;
 
@@ -2875,20 +2958,35 @@ void LibraryView::DrawRowChapterDropdown(Renderer& r, Ui& ui, const D2D1_RECT_F&
     const float totalH = (float)displayChapters.size() * pitch - gap;
     m_chDropdownMaxScroll = std::max(0.0f, totalH - listH);
 
-    // En son okunan sayinin pozisyonuna gore acilma (Kullanici istegi)
+    // En son okunan sayinin pozisyonuna gore acilma; hic okunmamissa 1. bolume odaklanma
     if (m_chDropdownNeedsScrollToCurrent) {
         m_chDropdownNeedsScrollToCurrent = false;
+        const std::string lastId = ChapterUrlIdentity(m_chDropdownRow.lastChapterUrl);
         int curIdx = -1;
         for (size_t ci = 0; ci < displayChapters.size(); ++ci) {
             const ChapterItem& ch = *displayChapters[ci];
-            if (ch.isCurrent || (!m_chDropdownRow.lastChapterUrl.empty() && ch.url == m_chDropdownRow.lastChapterUrl)) {
+            if (ch.isCurrent || (!lastId.empty() && ChapterUrlIdentity(ch.url) == lastId)) {
                 curIdx = (int)ci;
                 break;
             }
         }
+        if (curIdx < 0 && !m_chDropdownRow.lastChapterUrl.empty() && !m_chDropdownRow.chapterLabel.empty()) {
+            const double targetNum = ChapterNumber(ToUtf8(m_chDropdownRow.chapterLabel), m_chDropdownRow.lastChapterUrl);
+            if (targetNum >= 0.0) {
+                for (size_t ci = 0; ci < displayChapters.size(); ++ci) {
+                    if (std::abs(ChapterNumber(displayChapters[ci]->title, displayChapters[ci]->url) - targetNum) < 0.001) {
+                        curIdx = (int)ci;
+                        break;
+                    }
+                }
+            }
+        }
         if (curIdx >= 0) {
-            float targetY = (float)curIdx * pitch - (listH * 0.45f);
+            float targetY = (float)curIdx * pitch - (listH * 0.42f);
             m_chDropdownScroll = std::clamp(targetY, 0.0f, m_chDropdownMaxScroll);
+        } else {
+            // Hic okunmamis manga: ilk sayiya (Bolum 1) otomatik odaklan
+            m_chDropdownScroll = m_chDropdownSortAsc ? 0.0f : m_chDropdownMaxScroll;
         }
     }
     m_chDropdownScroll = std::clamp(m_chDropdownScroll, 0.0f, m_chDropdownMaxScroll);
@@ -2908,7 +3006,7 @@ void LibraryView::DrawRowChapterDropdown(Renderer& r, Ui& ui, const D2D1_RECT_F&
         const bool clicked = (RcH(hitRc) > 1.0f) && ui.Button(cid, hitRc);
         const bool hot = ui.Hot(cid);
 
-        bool isCurrent = ch.isCurrent || (!m_chDropdownRow.lastChapterUrl.empty() && ch.url == m_chDropdownRow.lastChapterUrl);
+        bool isCurrent = ch.isCurrent || (!m_chDropdownRow.lastChapterUrl.empty() && ChapterUrlIdentity(ch.url) == ChapterUrlIdentity(m_chDropdownRow.lastChapterUrl));
 
         if (isCurrent) {
             r.FillRound(itemRc, 6.0f * s, theme::Active, theme::ActiveAlpha);

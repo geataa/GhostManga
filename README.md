@@ -78,7 +78,63 @@ Instant runtime switching (`L` shortcut or **Settings → Appearance**) across *
 
 ---
 
-## ⌨️ Keyboard Shortcuts
+## 📘 Kullanım Kılavuzu (Detaylı Türkçe Rehber)
+
+**GhostManga**, kurulum gerektirmeyen taşınabilir (portable) yapısı, donanım hızlandırmalı (Direct2D / D3D11) arayüzü ve gömülü tarayıcı (WebView2) desteğiyle tüm manga okuma ve takip ihtiyaçlarınızı tek bir `.exe` içinde sunar.
+
+### 1. 🚀 Kurulum ve İlk Çalıştırma
+- **Kurulumsuz Çalıştırma**: `GhostManga.exe` dosyasını istediğiniz bir klasöre koyup doğrudan çift tıklayarak çalıştırabilirsiniz. Harici DLL veya kurulum sihirbazı gerektirmez.
+- **Taşınabilir Veri Yapısı (`portable_data/`)**: Uygulama ilk çalıştığında `GhostManga.exe`'nin yanına otomatik olarak `portable_data/` klasörünü oluşturur. Kütüphaneniz (`library.json` ve otomatik yedeği `library.json.bak`), ayarlarınız (`settings.ini`), çerezleriniz ve indirilen/önbelleğe alınan bölümler tamamen bu klasörde tutulur. Klasörü başka bir bilgisayara taşıdığınızda tüm verileriniz olduğu gibi korunur.
+- **AMR (All Mangas Reader) Yedeğini İçe Aktarma**:
+  - Üst araç çubuğundaki **`📥 İçe Aktar`** butonuna tıklayarak veya **`Ctrl+I`** kısayolunu kullanarak `.json` uzantılı AMR yedeğinizi seçebilirsiniz.
+  - Alternatif olarak yedek dosyanızı doğrudan GhostManga penceresinin üzerine **sürükleyip bırakabilirsiniz (Drag & Drop)**.
+
+### 2. 🗂️ Sekme Çubuğu ve Yatay Sekme Kaydırma (Tab Scroll)
+- **Sabit Ana Sekmeler**: Üst sekme çubuğundaki **📚 Kütüphane** sekmesi her zaman sol tarafta sabit (pinned) kalır; çok sayıda manga veya tarayıcı sekmesi açtığınızda asla kaybolmaz.
+- **Yatay Kaydırma (Scroll)**: Çok fazla sekme açtığınızda sekme çubuğu otomatik olarak yatay kaydırma moduna geçer:
+  - Fare imlecini sekme çubuğunun üzerine getirip **fare tekerleğini (Mouse Wheel)** çevirerek sekmeler arasında sağa/sola kaydırma yapabilirsiniz.
+  - Sekme çubuğunun sağında ve solunda beliren **`<`** ve **`>`** kaydırma butonlarına tıklayarak sekmeleri kaydırabilirsiniz.
+  - Bir sekmeye tıkladığınızda veya yeni sekme açtığınızda görünüm otomatik olarak aktif sekmeye odaklanır.
+- **Hızlı Sekme Kapatma**: Herhangi bir sekmenin üzerindeki **`×`** butonuna tıklayarak veya sekmenin üzerine **fare orta tuşu (Middle Click)** ile tıklayarak sekmeyi anında kapatabilirsiniz.
+
+### 3. 📚 Kütüphane Görünümü ve Akıllı Bölüm Seçimi
+- **Kart ve Liste Görünümleri**: Kütüphanenizi kapak görselli **Kart (Grid)** görünümünde veya kompakt **Liste (Satır)** görünümünde inceleyebilirsiniz:
+  - 🟡 **Sarı çerçeve / rozet**: Okunmamış yeni bölümleri olan seriler.
+  - 🔵 **Mavi çerçeve / rozet**: Son yayınlanan bölüme kadar okunmuş güncel seriler.
+  - 🔴 **Kırmızı çerçeve / uyarı**: Kaynak güncelleme hatası alan seriler.
+- **Akıllı Bölüm Listesi Odaklama (Smart Auto-Scroll)**:
+  - **Daha önce okuduğunuz bir mangayı açtığınızda**: Seri detay kartındaki veya liste görünümündeki bölüm açılır menüsü (popup), **en son kaldığınız bölüme** otomatik olarak kaydırılmış şekilde açılır.
+  - **Hiç okumadığınız (yeni eklenen) bir mangayı açtığınızda**: Bölüm listesi en son sayı yerine otomatik olarak **en ilk bölüme (Bölüm 1)** kaydırılmış şekilde açılır; böylece yüzlerce bölümlük serilerde 1. bölüme inmek için aşağı kaydırmak zorunda kalmazsınız.
+- **Bölüm Filtreleme ve Arama**: Seri detay penceresinde bölümleri *Tümü / Okunmamış / Okunmuş* olarak filtreleyebilir, bölüm numarası arayabilir, **"Son Bölüme Kadar Okundu İşaretle"** veya **"İlerlemeyi Sıfırla"** işlemlerini tek tıkla yapabilirsiniz.
+
+### 4. 🌐 Varsayılan Sistem Tarayıcısında Açma (`Tarayıcıda Aç ↗`)
+İstediğiniz herhangi bir mangayı veya bölümü bilgisayarınızın varsayılan web tarayıcısında (Chrome, Edge, Brave, Firefox vb.) tek tıkla açabilirsiniz:
+- **Kütüphane Detay Penceresinde**: Manga başlığının altındaki kaynak rozetinin yanında bulunan **`🌐 Tarayıcıda Aç ↗`** butonuna tıklayarak manganın ana sayfasını varsayılan tarayıcınızda açabilirsiniz.
+- **Okuyucu (Reader) Üst Çubuğunda ve Yan Menüde (`M`)**: Okuma yaparken üst çubuktaki **`🌐 Tarayıcıda Aç ↗`** butonuna veya yan çekmecedeki (`M` tuşu) aynı isimli butona tıklayarak o an okuduğunuz bölümü doğrudan sistem tarayıcınızda açabilirsiniz.
+- **Gömülü Tarayıcı (Browser) Sekmesinde**: Üst adres çubuğunun sağındaki **`🌐 Tarayıcıda Aç ↗`** butonuna tıklayarak o an açık olan web sayfasını varsayılan sistem tarayıcınıza aktarabilirsiniz.
+
+### 5. ⚡ Gömülü Tarayıcı, Lazy-Load (Kaydırdıkça Yüklenen) Sayfalar ve Koruma Aşma
+- **Otomatik Cloudflare / WAF Geçişi**: Kaynak sitelerde Cloudflare Turnstile veya tarayıcı doğrulaması devrede olduğunda GhostManga otomatik olarak gömülü Chromium (WebView2) katmanına geçer ve doğrulama çerezlerini (`cf_clearance`) tüm uygulama ile paylaşır.
+- **Kaydırdıkça Yüklenen (Lazy-Load / Scroll-Triggered) Manga Sayfaları**:
+  - Bazı manga siteleri sayfa görsellerini yalnızca aşağı kaydırıldıkça (`IntersectionObserver`, `data-src`, `data-lazy-src` veya özel iç kapsayıcılar ile) yükler.
+  - GhostManga hem statik HTML/script ayrıştırıcısında (`ts_reader.run`, `data-src` vb.) hem de gömülü tarayıcıdaki **`⚡ GhostManga'da Oku`** modunda sayfayı ve iç kaydırma alanlarını dinamik olarak tarayarak yalnızca ilk birkaç sayfayı değil, **bölümün tamamını** eksiksiz çeker.
+- **Akıllı Reklam / Popup Engelleyici**: Gömülü tarayıcıda gerçek insan doğrulaması (Cloudflare/Captcha) pencerelerine izin verirken, arka planda açılıp kapanmaya çalışan reklam ve yönlendirme (redirect) pencerelerini sessizce engeller.
+
+### 6. 📖 Okuyucu Modları ve Kontroller
+- **Webtoon Modu (`W`)**: Dikey kesintisiz şerit okuma modu (manhwa ve webtoon'lar için ideal).
+- **Çift Sayfa Modu (`B`)**: Klasik manga görünümü için yan yana iki sayfa modu (kapak sayfasını tek gösterme seçeneğiyle).
+- **Okuma Yönü (`R`)**: Sağdan sola (RTL - Japon mangaları) veya soldan sağa (LTR - Manhwa/Çizgi roman) geçişi.
+- **Alt Önizleme Şeridi (Film Strip)**: Ekranın alt kısmındaki küçük sayfa önizlemelerine tıklayarak istediğiniz sayfaya anında atlayabilirsiniz.
+- **Yakınlaştırma ve Parlaklık**: `+` / `-` / `0` tuşları (veya `Ctrl + Fare Tekerleği`) ile yakınlaştırma yapabilir, `[` ve `]` tuşları ile arka plan karartmasını ayarlayabilirsiniz.
+
+### 7. 💾 Çevrimdışı İndirme (`.CBZ`) ve Yerel Manga Okuma
+- **Çevrimdışı Kaydetme**: Okuduğunuz veya kütüphanenizdeki bölümleri tek tıkla `.cbz` arşivi olarak indirebilirsiniz.
+- **Yerel Klasör ve Arşiv Açma (`Ctrl+O`)**: Bilgisayarınızdaki `.cbz`, `.zip` arşivlerini veya resim klasörlerini doğrudan GhostManga'da açıp okuyabilirsiniz.
+- **Güvenli Silme**: Yerel bölümleri sildiğinizde dosyalar kalıcı olarak yok edilmez; onayınız alınarak güvenli şekilde **Windows Geri Dönüşüm Kutusu'na (Recycle Bin)** taşınır.
+
+---
+
+## ⌨️ Keyboard Shortcuts (Klavye Kısayolları)
 
 | Shortcut | Action |
 | :--- | :--- |

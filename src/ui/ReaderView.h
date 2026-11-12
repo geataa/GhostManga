@@ -37,6 +37,7 @@ public:
     virtual void AddBookmark(const std::wstring& seriesName, const std::wstring& chapterName, int pageIndex) = 0;
     virtual void DownloadChapter(const std::wstring& chapterDir, const std::wstring& seriesName, const std::wstring& chapterName) = 0;
     virtual void ReloadCurrentChapter() = 0;
+    virtual void OpenCurrentInDefaultBrowser() {}
     virtual bool NavigateChapter(int delta) = 0;
     virtual bool OpenChapterByIndex(int index) = 0;
     virtual const std::vector<OnlineChapter>& GetCurrentChapters() const = 0;

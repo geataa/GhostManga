@@ -23,6 +23,7 @@ public:
     virtual void Toast(const std::wstring& msg) = 0;
     virtual void Invalidate() = 0;
     virtual void CloseBrowser() = 0;
+    virtual void OpenUrl(const std::wstring& url) = 0;
     virtual void OpenExtractedChapter(const std::wstring& chapterDir, const std::wstring& mangaTitle, const std::wstring& chapterTitle) = 0;
     virtual void DecoderSignaled() = 0;
     virtual void RunOnUIThread(std::function<void()> fn) = 0;

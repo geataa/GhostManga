@@ -23,6 +23,7 @@
 #include <thread>
 #include <algorithm>
 #include <ctime>
+#include <deque>
 
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::Callback;
@@ -89,6 +90,19 @@ public:
     std::wstring m_pendingUrl;
 
     enum class CrawlMode { None, Chapters, Images };
+    struct CrawlJob {
+        CrawlMode mode = CrawlMode::None;
+        int tabIndex = -1;
+        std::string url;
+        std::wstring mangaTitle;
+        std::wstring chapterTitle;
+        std::function<void(const ChapterCrawlResult&)> chapterCb;
+        std::function<void(const ImageCrawlResult&)> imageCb;
+    };
+    std::deque<CrawlJob> m_crawlQueue;
+    uint64_t m_activeCrawlId = 0;
+    std::shared_ptr<std::atomic<bool>> m_alive = std::make_shared<std::atomic<bool>>(true);
+
     CrawlMode m_crawlMode = CrawlMode::None;
     std::shared_ptr<browser::BrowserImageBuffer> m_browserImages;
     int m_crawlTabIndex = -1;
@@ -106,6 +120,67 @@ public:
     int m_pendingImageTabIndex = -1;
     bool m_challengeModeActive = false;
     std::string m_challengeTargetUrl;
+
+    void StartCrawlWatchdog(uint64_t crawlId) {
+        auto alive = m_alive;
+        BrowserHost* host = m_host;
+        if (!host) return;
+        std::thread([this, alive, host, crawlId]() {
+            int waitedMs = 0;
+            while (waitedMs < 25000) {
+                if (!alive || !alive->load()) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                waitedMs += 500;
+            }
+            if (!alive || !alive->load()) return;
+            host->RunOnUIThread([this, alive, crawlId]() {
+                if (!alive || !alive->load()) return;
+                if (m_activeCrawlId != crawlId || m_crawlMode == CrawlMode::None) return;
+                if (m_challengeModeActive) {
+                    StartCrawlWatchdog(crawlId);
+                    return;
+                }
+                log::Write(L"[BrowserView] Crawl watchdog timeout (25s) reached for crawlId=%llu", (unsigned long long)crawlId);
+                FailActiveCrawl("Sayfa yanıt vermedi (zaman aşımı)");
+            });
+        }).detach();
+    }
+
+    void FailActiveCrawl(const std::string& reason) {
+        ++m_activeCrawlId;
+        auto mode = m_crawlMode;
+        m_crawlMode = CrawlMode::None;
+        m_browserImages.reset();
+        if (mode == CrawlMode::Chapters && m_chapterCrawlCb) {
+            auto cb = std::move(m_chapterCrawlCb);
+            m_chapterCrawlCb = nullptr;
+            ChapterCrawlResult res;
+            res.success = false;
+            res.errorMessage = reason;
+            cb(res);
+        } else if (mode == CrawlMode::Images && m_imageCrawlCb) {
+            auto cb = std::move(m_imageCrawlCb);
+            m_imageCrawlCb = nullptr;
+            ImageCrawlResult res;
+            res.success = false;
+            res.mangaTitle = m_crawlMangaTitle;
+            res.chapterTitle = m_crawlChapterTitle;
+            res.errorMessage = reason;
+            cb(res);
+        }
+        StartNextQueuedCrawl();
+    }
+
+    void StartNextQueuedCrawl() {
+        if (m_crawlMode != CrawlMode::None || m_crawlQueue.empty()) return;
+        CrawlJob next = std::move(m_crawlQueue.front());
+        m_crawlQueue.pop_front();
+        if (next.mode == CrawlMode::Chapters) {
+            CrawlMangaChapters(next.url, std::move(next.chapterCb));
+        } else if (next.mode == CrawlMode::Images) {
+            CrawlChapterImages(next.tabIndex, next.url, next.mangaTitle, next.chapterTitle, std::move(next.imageCb));
+        }
+    }
 
     bool Init(HWND parent, BrowserHost* host, BrowserView* view) {
         m_parent = parent;
@@ -594,6 +669,7 @@ public:
             let attempts = 0;
             let challengeWait = 0;
             let bestImages = [], stableImagePasses = 0;
+            let scrollReachedBottom = false;
 
             function isRealBotChallenge() {
                 try {
@@ -794,6 +870,7 @@ public:
             let attempts = 0;
             let challengeWait = 0;
             let bestImages = [], stableImagePasses = 0;
+            let scrollReachedBottom = false;
 
             function isRealBotChallenge() {
                 try {
@@ -848,18 +925,51 @@ public:
                 challengeWait = 0;
 
                 try {
-                    // Lazy-loading tetiklemek icin tum sayfa boyunca kademeli asagi kaydir
+                    // Lazy-loading ve IntersectionObserver tetiklemek icin dinamik scrollHeight ve ic konteyner taramasi
                     try {
-                        const totalH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-                        if (totalH > 800) {
-                            for (let y = 0; y < totalH; y += 800) {
-                                window.scrollTo(0, y);
-                                await new Promise(r => setTimeout(r, 35));
-                            }
-                            window.scrollTo(0, totalH);
-                            await new Promise(r => setTimeout(r, 120));
+                        let innerScroller = null;
+                        const scrollerCands = ['#readerarea', '.reading-content', '#viewer', '.chapter-content', '.viewer-cnt', '.read-content', 'main'];
+                        for (const sc of scrollerCands) {
+                            const el = document.querySelector(sc);
+                            if (el && el.scrollHeight > el.clientHeight + 200) { innerScroller = el; break; }
                         }
-                    } catch(e) {}
+                        const getMaxH = () => Math.max(
+                            document.body ? document.body.scrollHeight : 0,
+                            document.documentElement ? document.documentElement.scrollHeight : 0,
+                            innerScroller ? innerScroller.scrollHeight : 0
+                        );
+                        let curTotalH = getMaxH();
+                        if (curTotalH > 600) {
+                            let y = 0, steps = 0;
+                            while (y < curTotalH && steps < 60) {
+                                y += 700;
+                                steps++;
+                                window.scrollTo(0, y);
+                                if (innerScroller) innerScroller.scrollTop = y;
+                                try { window.dispatchEvent(new Event('scroll')); } catch(e) {}
+                                await new Promise(r => setTimeout(r, 40));
+                                curTotalH = getMaxH();
+                            }
+                            window.scrollTo(0, curTotalH);
+                            if (innerScroller) innerScroller.scrollTop = curTotalH;
+                        }
+                        // IntersectionObserver bekleyen lazy img ve placeholder'lari gorunur alana tetikle
+                        const lazyNodes = document.querySelectorAll(
+                            'img[data-src], img[data-lazy-src], img[data-original], img[data-cfsrc], img[data-pagespeed-lazy-src], ' +
+                            'img:not([src]), img[src^="data:"], img[src*="loading"], img[src*="blank"], img[src*="placeholder"], ' +
+                            '.page-break img, .chapter-image img, .reading-content img, #readerarea img'
+                        );
+                        if (lazyNodes && lazyNodes.length > 0) {
+                            const step = Math.max(1, Math.floor(lazyNodes.length / 25));
+                            for (let i = 0; i < lazyNodes.length; i += step) {
+                                try { lazyNodes[i].scrollIntoView({ block: 'center', behavior: 'instant' }); } catch(e) {}
+                            }
+                            try { lazyNodes[lazyNodes.length - 1].scrollIntoView({ block: 'end', behavior: 'instant' }); } catch(e) {}
+                            await new Promise(r => setTimeout(r, 140));
+                        }
+                        const afterH = getMaxH();
+                        if (afterH <= curTotalH + 400) scrollReachedBottom = true;
+                    } catch(e) { scrollReachedBottom = true; }
 
                     let imgs = [], seen = new Set();
                     function addUrl(u) {
@@ -868,7 +978,7 @@ public:
                         if (u.startsWith('//')) u = 'https:' + u;
                         if (!u || u.startsWith('data:image/svg') || u.startsWith('data:image/gif;base64,R0lGODlhAQABA') || u.length < 5) return;
                         const low = u.toLowerCase();
-                        if (low.includes('blank.gif') || low.includes('pixel.gif') || low.includes('loading.') ||
+                        if (low.includes('blank.gif') || low.includes('pixel.gif') || low.includes('spacer.gif') || low.includes('loading.') ||
                             low.includes('placeholder') || low.includes('spinner') || low.includes('1x1') ||
                             low.includes('avatar') || low.includes('logo') || low.includes('icon') ||
                             low.includes('banner') || low.includes('ad.') || low.includes('ad_') ||
@@ -927,6 +1037,28 @@ public:
                     if (window.ts_reader && window.ts_reader.params && window.ts_reader.params.sources) {
                         try { for (const s of window.ts_reader.params.sources) if (Array.isArray(s.images)) for (const img of s.images) addUrl(img); } catch(e) {}
                     }
+                    if (imgs.length === 0 && window.__NEXT_DATA__ && window.__NEXT_DATA__.props && window.__NEXT_DATA__.props.pageProps) {
+                        try {
+                            const pp = window.__NEXT_DATA__.props.pageProps;
+                            const cands = [
+                                pp.initialChapter && pp.initialChapter.images,
+                                pp.chapter && pp.chapter.images,
+                                pp.chapter && pp.chapter.pages,
+                                pp.data && pp.data.images,
+                                pp.images,
+                                pp.pages
+                            ];
+                            for (const arr of cands) {
+                                if (Array.isArray(arr) && arr.length > 0) {
+                                    for (const it of arr) {
+                                        if (typeof it === 'string') addUrl(it);
+                                        else if (it && (it.url || it.src || it.image || it.page_image)) addUrl(it.url || it.src || it.image || it.page_image);
+                                    }
+                                    if (imgs.length > 0) break;
+                                }
+                            }
+                        } catch(e) {}
+                    }
                     if (window.newImgs && Array.isArray(window.newImgs)) {
                         for (const u of window.newImgs) addUrl(u);
                     }
@@ -937,14 +1069,31 @@ public:
                         for (const p of window.pages) { if (typeof p === 'string') addUrl(p); else if (p && (p.page_image || p.url)) addUrl(p.page_image || p.url); }
                     }
                     if (imgs.length === 0 && window.chapter_images && Array.isArray(window.chapter_images)) for (const u of window.chapter_images) addUrl(u);
+                    if (imgs.length === 0 && window.chapImages && Array.isArray(window.chapImages)) for (const u of window.chapImages) addUrl(u);
+                    if (imgs.length === 0 && window.page_list && Array.isArray(window.page_list)) for (const u of window.page_list) addUrl(u);
                     if (imgs.length === 0 && window.images && Array.isArray(window.images)) for (const u of window.images) addUrl(u);
 
-                    // Dean Edwards packer / regex unpacker (FanFox, MangaHere, vs.)
+                    // Inline ts_reader.run({...}) / Dean Edwards packer / regex unpacker (FanFox, MangaHere, MangaStream, vs.)
                     if (imgs.length === 0) {
                         try {
                             const scripts = document.querySelectorAll('script');
                             for (const s of scripts) {
                                 const code = s.textContent || '';
+                                if (code.includes('ts_reader.run(')) {
+                                    const m = code.match(/ts_reader\.run\(\s*(\{[\s\S]*?\})\s*\)/);
+                                    if (m) {
+                                        try {
+                                            const parsed = JSON.parse(m[1]);
+                                            if (parsed && Array.isArray(parsed.sources)) {
+                                                for (const srcObj of parsed.sources) {
+                                                    if (srcObj && Array.isArray(srcObj.images)) {
+                                                        for (const u of srcObj.images) addUrl(u);
+                                                    }
+                                                }
+                                            }
+                                        } catch(e) {}
+                                    }
+                                }
                                 if (code.includes('function(p,a,c,k,e,d)')) {
                                     try {
                                         const idx = code.indexOf('eval(function(p,a,c,k,e,d)');
@@ -1068,6 +1217,7 @@ public:
                                       img.getAttribute('data-original') || img.getAttribute('data-url') ||
                                       img.getAttribute('data-echo') || img.getAttribute('data-img') ||
                                       img.getAttribute('data-page') || img.getAttribute('data-cfsrc') ||
+                                      img.getAttribute('data-pagespeed-lazy-src') || img.getAttribute('data-lazy') ||
                                       img.getAttribute('data-cdn-src') || img.getAttribute('data-full-url') ||
                                       img.getAttribute('data-origin') || img.getAttribute('data-fallback-src') ||
                                       extractFromSrcset(img.getAttribute('data-srcset')) ||
@@ -1118,7 +1268,8 @@ public:
 
                     if (imgs.length > bestImages.length) { bestImages = imgs.slice(); stableImagePasses = 0; }
                     else if (imgs.length === bestImages.length && imgs.length > 0) ++stableImagePasses;
-                    if ((bestImages.length > 2 && stableImagePasses >= 2) || attempts >= 15) {
+                    const minStablePasses = (bestImages.length >= 8 && scrollReachedBottom) ? 2 : 4;
+                    if ((bestImages.length > 2 && stableImagePasses >= minStablePasses && (scrollReachedBottom || attempts >= 6)) || attempts >= 16) {
                         imgs = bestImages;
                         window.chrome.webview.postMessage(JSON.stringify({
                             type: 'crawl_images_result',
@@ -1306,6 +1457,7 @@ public:
 
         if (type == "crawl_chapters_result") {
             if (!m_chapterCrawlCb) return;
+            ++m_activeCrawlId;
             auto cb = m_chapterCrawlCb;
             m_chapterCrawlCb = nullptr;
             m_crawlMode = CrawlMode::None;
@@ -1329,11 +1481,13 @@ public:
             res.success=res.success && !res.chapters.empty();
             if(!res.success && res.errorMessage.empty()) res.errorMessage="Geçerli bölüm bağlantısı bulunamadı";
             cb(res);
+            StartNextQueuedCrawl();
             return;
         }
 
         if (type == "crawl_images_result") {
             if (!m_imageCrawlCb) return;
+            ++m_activeCrawlId;
             auto cb = m_imageCrawlCb;
             m_imageCrawlCb = nullptr;
             m_crawlMode = CrawlMode::None;
@@ -1356,6 +1510,7 @@ public:
                 res.chapterTitle = m_crawlChapterTitle;
                 res.errorMessage = root.Get("error") ? root.Get("error")->AsString() : "Bölüm görselleri bulunamadı";
                 cb(res);
+                StartNextQueuedCrawl();
                 return;
             }
 
@@ -1376,6 +1531,7 @@ public:
             res.chapterTitle = cTitle;
             res.pageCount = (int)images.size();
             cb(res);
+            StartNextQueuedCrawl();
 
             BrowserHost* bHost = m_host;
             int tabIdx = m_crawlTabIndex;
@@ -1453,10 +1609,19 @@ public:
         }
 
         std::string safeMangaUrl = net::NormalizeMirrorUrl(mangaUrl);
+        if (m_crawlMode != CrawlMode::None) {
+            CrawlJob job;
+            job.mode = CrawlMode::Chapters;
+            job.url = safeMangaUrl;
+            job.chapterCb = onComplete;
+            m_crawlQueue.push_back(std::move(job));
+            return;
+        }
         m_chapterCrawlCb = onComplete;
         m_crawlMangaUrl = safeMangaUrl;
         m_crawlMode = CrawlMode::Chapters;
         m_browserImages.reset();
+        StartCrawlWatchdog(++m_activeCrawlId);
 
         if (!m_ready || !m_webview) {
             m_pendingMangaCrawlUrl = safeMangaUrl;
@@ -1480,6 +1645,28 @@ public:
         }
 
         std::string safeChapterUrl = net::NormalizeMirrorUrl(chapterUrl);
+        if (m_crawlMode != CrawlMode::None) {
+            if (tabIndex >= 0) {
+                for (auto& existing : m_crawlQueue) {
+                    if (existing.mode == CrawlMode::Images && existing.tabIndex == tabIndex) {
+                        existing.url = safeChapterUrl;
+                        existing.mangaTitle = mangaTitle;
+                        existing.chapterTitle = chapterTitle;
+                        existing.imageCb = onComplete;
+                        return;
+                    }
+                }
+            }
+            CrawlJob job;
+            job.mode = CrawlMode::Images;
+            job.tabIndex = tabIndex;
+            job.url = safeChapterUrl;
+            job.mangaTitle = mangaTitle;
+            job.chapterTitle = chapterTitle;
+            job.imageCb = onComplete;
+            m_crawlQueue.push_back(std::move(job));
+            return;
+        }
         m_imageCrawlCb = onComplete;
         m_crawlTabIndex = tabIndex;
         m_crawlChapterUrl = safeChapterUrl;
@@ -1488,6 +1675,7 @@ public:
         m_crawlMode = CrawlMode::Images;
         const bool kawaii=safeChapterUrl.rfind("https://www.mangakawaii.fr/",0)==0 || safeChapterUrl.rfind("https://mangakawaii.fr/",0)==0;
         m_browserImages=kawaii?std::make_shared<browser::BrowserImageBuffer>():nullptr;
+        StartCrawlWatchdog(++m_activeCrawlId);
 
         if (!m_ready || !m_webview) {
             m_pendingImageTabIndex = tabIndex;
@@ -1569,6 +1757,9 @@ public:
     }
 
     void Shutdown() {
+        if (m_alive) m_alive->store(false);
+        ++m_activeCrawlId;
+        m_crawlQueue.clear();
         m_browserImages.reset();
         if (m_controller) {
             m_controller->Close();
@@ -1743,15 +1934,22 @@ void BrowserView::DrawBar(Renderer& r, Ui& ui, const D2D1_RECT_F& bar, double no
     ui.Tip(Id("wv.refresh"), i18n::Literal(L"Yenile"), RcWH(x, y, btnW, btnH));
     x += btnW + 12.0f * s;
 
-    // Sagdaki butonlar: Kapat ve "GhostManga'da Oku"
+    // Sagdaki butonlar: Kapat, Varsayilan Tarayicida Ac ve "GhostManga'da Oku"
     const float closeW = 34.0f * s;
+    const float extBtnW = 34.0f * s;
     const float amrBtnW = 200.0f * s;
     const D2D1_RECT_F closeRc = RcWH(bar.right - closeW - 8.0f * s, y, closeW, btnH);
-    const D2D1_RECT_F amrRc = RcWH(closeRc.left - amrBtnW - 8.0f * s, y, amrBtnW, btnH);
+    const D2D1_RECT_F extRc = RcWH(closeRc.left - extBtnW - 6.0f * s, y, extBtnW, btnH);
+    const D2D1_RECT_F amrRc = RcWH(extRc.left - amrBtnW - 8.0f * s, y, amrBtnW, btnH);
 
     // Kapat butonu
     if (w::IconButton(r, ui, Id("wv.close"), closeRc, Icon::Close, 16.0f * s, i18n::Literal(L"Tarayıcıyı Kapat (ESC)"))) {
         if (m_host) m_host->CloseBrowser();
+    }
+
+    // Varsayilan sistem tarayicisinda ac butonu
+    if (w::IconButton(r, ui, Id("wv.openext"), extRc, Icon::Globe, 17.0f * s, i18n::Literal(L"Varsayılan Sistem Tarayıcısında Aç ↗"), false, !m_currentUrl.empty())) {
+        if (m_host && !m_currentUrl.empty()) m_host->OpenUrl(m_currentUrl);
     }
 
     // GhostManga Okuyucusunda Ac (AMR tarzı görsel çıkarma)
@@ -1880,7 +2078,9 @@ void BrowserView::ExtractAndRead() {
                 for (const img of nodes) {
                     let src = img.getAttribute('data-src') || img.getAttribute('data-lazy-src') ||
                               img.getAttribute('data-original') || img.getAttribute('data-url') ||
+                              img.getAttribute('data-echo') || img.getAttribute('data-img') ||
                               img.getAttribute('data-page') || img.getAttribute('data-cfsrc') ||
+                              img.getAttribute('data-pagespeed-lazy-src') || img.getAttribute('data-lazy') ||
                               img.getAttribute('data-cdn-src') || img.getAttribute('data-full-url') ||
                               img.currentSrc || img.src;
                     addUrl(src);
@@ -2193,11 +2393,10 @@ void BrowserView::ReloadCurrentPage() {
 void BrowserView::CancelChallengeVerification() {
     if (m_impl) {
         m_impl->m_challengeModeActive = false;
-        m_impl->m_crawlMode = Impl::CrawlMode::None;
-        m_impl->m_browserImages.reset();
         if (m_impl->m_controller) {
             m_impl->m_controller->put_IsVisible(FALSE);
         }
+        m_impl->FailActiveCrawl("Robot doğrulaması iptal edildi");
     }
 }
 

@@ -125,12 +125,13 @@ HttpResponse Fetcher::Fetch(HttpRequest req, int minDelayMs) {
     ChallengeInfo cInfo = ChallengeDetector::Detect(res);
     const bool nativeTransportFailure = !res.success &&
         (res.error.find("12175") != std::string::npos || res.error.find("12030") != std::string::npos);
-    // These requested sources work in a normal browser session while rejecting
-    // WinHTTP. Let the existing app browser profile try once; a 403 remains a
-    // failure if Chromium is also denied. No cookie export or TLS exceptions.
-    const bool sourceBrowserSession = cInfo.isBlocked &&
-        (host=="sadscans.net" || host=="www.sadscans.net" || host=="www.mangakawaii.fr" ||
-         host=="mangakawaii.fr" || host=="dragontea.ink" || host=="toonily.com");
+    // Sources protected by Cloudflare/WAF often reject WinHTTP's TLS fingerprint
+    // with 403/503 ("Access denied") while succeeding in a real Chromium session.
+    // Let the app browser profile try once for any remote host; a 403 remains a
+    // failure if Chromium is also denied.
+    const bool isLocalHost = (host == "127.0.0.1" || host == "localhost" || host.empty());
+    const bool sourceBrowserSession = !isLocalHost &&
+        (cInfo.isBlocked || res.status == 403 || res.status == 503);
     if (req.allowBrowserFallback && (cInfo.NeedsBrowser() || nativeTransportFailure || sourceBrowserSession) && browser::WebViewHost::Instance().IsAvailable()) {
         log::Write(L"[Fetch] Challenge detected on '%s' (%s). Escalating to Lane C (WebView2)...",
                    FromUtf8(host).c_str(), FromUtf8(cInfo.reason).c_str());

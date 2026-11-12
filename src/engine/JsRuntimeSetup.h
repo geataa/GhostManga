@@ -171,6 +171,9 @@ class URLPolyfill {
         this.href = this.origin + this.pathname + this.search + this.hash;
         this.searchParams = new URLSearchParamsPolyfill(this.search);
     }
+    toString() {
+        return this.href;
+    }
 }
 globalThis.URL = URLPolyfill;
 
@@ -291,13 +294,34 @@ globalThis.mirrorHelper = new MirrorHelper({});
 inline constexpr const char* kCheerioShimJs = R"JS(
 // Cheerio shim backed by amrHost and Lexbor
 (function() {
+    function resolveAttr(docId, nodeId, name) {
+        let val = amrHost.attr(docId, nodeId, name);
+        if (name === 'src') {
+            const trimmed = (val || '').trim();
+            const low = trimmed.toLowerCase();
+            const isPlaceholder = !trimmed || low.startsWith('data:image/') ||
+                low.includes('blank.gif') || low.includes('pixel.gif') || low.includes('spacer.gif') ||
+                low.includes('loading.') || low.includes('placeholder') || low.includes('1x1');
+            if (isPlaceholder) {
+                const lazyAttrs = ['data-src', 'data-lazy-src', 'data-original', 'data-cfsrc', 'data-url', 'data-echo', 'data-pagespeed-lazy-src', 'data-full-url', 'data-cdn-src'];
+                for (const la of lazyAttrs) {
+                    const lv = amrHost.attr(docId, nodeId, la);
+                    if (lv && lv.trim().length > 4 && !lv.trim().toLowerCase().startsWith('data:image/')) {
+                        return lv.trim();
+                    }
+                }
+            }
+        }
+        return val;
+    }
+
     class CheerioNode {
         constructor(docId, nodeId) {
             this._docId = docId;
             this._nodeId = nodeId;
         }
         attr(name) {
-            return amrHost.attr(this._docId, this._nodeId, name);
+            return resolveAttr(this._docId, this._nodeId, name);
         }
         text() {
             return amrHost.text(this._docId, this._nodeId);
@@ -319,7 +343,7 @@ inline constexpr const char* kCheerioShimJs = R"JS(
 
         attr(name) {
             if (this.length === 0) return undefined;
-            return amrHost.attr(this._docId, this._nodeIds[0], name);
+            return resolveAttr(this._docId, this._nodeIds[0], name);
         }
 
         text() {

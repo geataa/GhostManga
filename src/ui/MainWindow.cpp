@@ -848,6 +848,7 @@ const ReaderView* MainWindow::ActiveReader() const {
 void MainWindow::ActivateTab(int index) {
     if (index < 0 || index >= (int)m_tabs.size()) return;
     m_activeTab = index;
+    m_tabEnsureVisible = index;
     const auto& tab = m_tabs[index];
     if (tab.type == TabType::Library) {
         m_browserView.Show(false);
@@ -1515,7 +1516,7 @@ void MainWindow::OpenOnlineManga(const std::string& mirrorName, const std::strin
         auto rawChapters = engine::MirrorEngine::Instance().GetChapters(mirrorName, safeMangaUrl, catalogueLanguage);
         if (rawChapters.empty()) {
             log::Write(L"[OnlineManga] MirrorEngine boş döndü, WebView2 Crawler devreye giriyor: %s", FromUtf8(safeMangaUrl).c_str());
-            m_browserView.CrawlMangaChapters(safeMangaUrl, [key, proceedWithChapters](const BrowserView::ChapterCrawlResult& cRes) {
+            m_browserView.CrawlMangaChapters(safeMangaUrl, [this, tabIdx, key, proceedWithChapters](const BrowserView::ChapterCrawlResult& cRes) {
                 std::vector<OnlineChapter> converted;
                 if (cRes.success && !cRes.chapters.empty()) {
                     converted.reserve(cRes.chapters.size());
@@ -1527,7 +1528,14 @@ void MainWindow::OpenOnlineManga(const std::string& mirrorName, const std::strin
                     }
                     amr::SaveCachedChapterList(key, pairs);
                 }
-                proceedWithChapters(std::move(converted));
+                if (m_quitting) return;
+                m_ownedWorkers.emplace_back([this, tabIdx, proceedWithChapters, converted = std::move(converted)]() mutable {
+                    try {
+                        proceedWithChapters(std::move(converted));
+                    } catch (...) {
+                        if (m_hwnd) PostMessageW(m_hwnd, WM_APP_ONLINE_FAIL, (WPARAM)tabIdx, 0);
+                    }
+                });
             });
             return;
         }
@@ -1541,7 +1549,11 @@ void MainWindow::OpenOnlineManga(const std::string& mirrorName, const std::strin
             pairs.push_back({ c.title, c.url });
         }
         amr::SaveCachedChapterList(key, pairs);
-        proceedWithChapters(std::move(converted));
+        try {
+            proceedWithChapters(std::move(converted));
+        } catch (...) {
+            if (m_hwnd) PostMessageW(m_hwnd, WM_APP_ONLINE_FAIL, (WPARAM)tabIdx, 0);
+        }
     });
 }
 
@@ -2076,11 +2088,18 @@ void MainWindow::DrawChallengeModal(const D2D1_RECT_F& content, double now) {
     m_r.Text(i18n::Literal(L"Lütfen aşağıdaki sayfada kutuyu işaretleyin. Tamamlanınca otomatik algılanıp kapanır."),
              subRc, theme::TextMuted, 11.5f * s, Renderer::Align::Left);
 
-    // Yenile ve İptal butonları
+    // Varsayilan Tarayici, Yenile ve İptal butonları
     const float btnH = 28.0f * s;
     const float btnW = 90.0f * s;
+    const float webBtnW = 135.0f * s;
+    const D2D1_RECT_F extWebRc = RcWH(card.right - btnW * 2.0f - webBtnW - 26.0f * s, card.top + (headerH - btnH) * 0.5f, webBtnW, btnH);
     const D2D1_RECT_F reloadRc = RcWH(card.right - btnW * 2.0f - 18.0f * s, card.top + (headerH - btnH) * 0.5f, btnW, btnH);
     const D2D1_RECT_F closeRc = RcWH(card.right - btnW - 10.0f * s, card.top + (headerH - btnH) * 0.5f, btnW, btnH);
+
+    if (w::TextButton(m_r, m_ui, Id("cf.openext"), extWebRc, i18n::Literal(L"🌐 Tarayıcıda Aç ↗"), false)) {
+        if (!m_challengeUrl.empty()) OpenUrl(FromUtf8(m_challengeUrl));
+    }
+    m_ui.Tip(Id("cf.openext"), i18n::Literal(L"Sayfayı sistemin varsayılan tarayıcısında aç"), extWebRc);
 
     if (w::TextButton(m_r, m_ui, Id("cf.reload"), reloadRc, i18n::Literal(L"🔄 Yenile"), false)) {
         m_browserView.ReloadCurrentPage();
@@ -2211,6 +2230,38 @@ void MainWindow::ReloadCurrentChapter() {
             tab.reader->Open(dir);
             Toast(i18n::Literal(L"Bölüm baştan yüklendi."));
         }
+    }
+}
+
+void MainWindow::OpenCurrentInDefaultBrowser() {
+    if (m_activeTab <= 0 || m_activeTab >= (int)m_tabs.size()) return;
+    const auto& tab = m_tabs[(size_t)m_activeTab];
+    std::string targetUrl = tab.chapterUrl;
+    if (targetUrl.empty() || targetUrl == "__FIRST__" || targetUrl == "__LAST__") {
+        if (tab.chapterIndex >= 0 && tab.chapterIndex < (int)tab.chapters.size()) {
+            targetUrl = tab.chapters[(size_t)tab.chapterIndex].url;
+        } else if (!tab.chapters.empty()) {
+            targetUrl = (targetUrl == "__FIRST__") ? tab.chapters.back().url : tab.chapters.front().url;
+        } else {
+            targetUrl = tab.mangaUrl;
+        }
+    }
+    if (targetUrl.rfind("/", 0) == 0 && !tab.mangaUrl.empty()) {
+        size_t p = tab.mangaUrl.find("://");
+        if (p != std::string::npos) {
+            size_t p2 = tab.mangaUrl.find('/', p + 3);
+            std::string origin = (p2 != std::string::npos) ? tab.mangaUrl.substr(0, p2) : tab.mangaUrl;
+            targetUrl = origin + targetUrl;
+        }
+    }
+    if (targetUrl.empty() && !tab.mangaUrl.empty()) targetUrl = tab.mangaUrl;
+    if (!targetUrl.empty()) {
+        OpenUrl(FromUtf8(targetUrl));
+    } else if (tab.reader && !tab.reader->Dir().empty()) {
+        const auto info = local::Describe(tab.reader->Dir(), m_lib);
+        if (!info.chapterUrl.empty()) OpenUrl(FromUtf8(info.chapterUrl));
+        else if (!info.mangaUrl.empty()) OpenUrl(FromUtf8(info.mangaUrl));
+        else Toast(i18n::Literal(L"Bu yerel bölüm için web adresi kayıtlı değil."));
     }
 }
 
@@ -2459,35 +2510,36 @@ void MainWindow::DrawTitleBar(const D2D1_RECT_F& bar, float a) {
         m_drawerOpen = !m_drawerOpen;
     }
 
-    // Sekmeler Alani (Tabs Area)
-    m_rcTabButtons.clear();
-    m_rcTabCloses.clear();
+    // Sekmeler Alani (Tabs Area) — Sekme 0 (Kutuphane) solda sabit, diger sekmeler yatay kaydirilabilir
+    const size_t numTabs = m_tabs.size();
+    m_rcTabButtons.assign(numTabs, D2D1_RECT_F{});
+    m_rcTabCloses.assign(numTabs, D2D1_RECT_F{});
+    m_rcTabScrollLeft = D2D1_RECT_F{};
+    m_rcTabScrollRight = D2D1_RECT_F{};
+    m_rcTabScrollStrip = D2D1_RECT_F{};
 
     const float tabH = bar.bottom - bar.top - Dp(6);
     const float tabY = bar.top + Dp(3);
-    float curX = m_rcTabsArea.left;
-    const float availW = m_rcTabsArea.right - m_rcTabsArea.left;
-
-    const size_t numTabs = m_tabs.size();
     const float tab0W = Dp(146.0f);
-    float otherW = Dp(165.0f);
-    if (numTabs > 1) {
-        float remainingW = availW - tab0W - Dp(4) * (float)numTabs;
-        float idealW = remainingW / (float)(numTabs - 1);
-        if (idealW < otherW) otherW = std::max(Dp(75.0f), idealW);
-    }
+    const float tabGap = Dp(3.0f);
 
-    for (size_t i = 0; i < numTabs; ++i) {
+    int tabToClose = -1;
+    int tabToActivate = -1;
+
+    auto drawSingleTab = [&](size_t i, const D2D1_RECT_F& tabRc, const D2D1_RECT_F& clipBounds) {
         const bool isTab0 = (i == 0);
-        const float tw = isTab0 ? tab0W : otherW;
-        if (curX + tw > m_rcTabsArea.right + Dp(2)) break;
+        const D2D1_RECT_F hitRc = Rc(
+            std::max(tabRc.left, clipBounds.left),
+            std::max(tabRc.top, clipBounds.top),
+            std::min(tabRc.right, clipBounds.right),
+            std::min(tabRc.bottom, clipBounds.bottom));
+        if (hitRc.right <= hitRc.left + Dp(2.0f) || hitRc.bottom <= hitRc.top) return;
 
-        const D2D1_RECT_F tabRc = RcWH(curX, tabY, tw, tabH);
-        m_rcTabButtons.push_back(tabRc);
+        m_rcTabButtons[i] = hitRc;
 
         const bool isActive = ((int)i == m_activeTab && m_view != View::Settings);
         const uint32_t tid = Id("tab.btn", (uint32_t)i);
-        const bool tabClicked = m_ui.Button(tid, tabRc);
+        const bool tabClicked = m_ui.Button(tid, hitRc);
 
         if (isActive) {
             m_r.FillRound(tabRc, Dp(6), theme::Elevated, 1.0f * a);
@@ -2498,9 +2550,9 @@ void MainWindow::DrawTitleBar(const D2D1_RECT_F& bar, float a) {
             m_r.FillRound(tabRc, Dp(6), theme::White, 0.05f * a);
         }
 
-        if(isTab0){
-            m_r.FillRound(tabRc,Dp(9),theme::ReadTone,(isActive?1.0f:0.65f)*a);
-            m_r.StrokeRound(tabRc,Dp(9),theme::Accent,Dp(1),isActive?0.8f*a:0.3f*a);
+        if (isTab0) {
+            m_r.FillRound(tabRc, Dp(9), theme::ReadTone, (isActive ? 1.0f : 0.65f) * a);
+            m_r.StrokeRound(tabRc, Dp(9), theme::Accent, Dp(1), isActive ? 0.8f * a : 0.3f * a);
         }
         Icon tabIcon = isTab0 ? Icon::Bookshelf : Icon::Library;
         if (m_tabs[i].type == TabType::Reader) tabIcon = Icon::Library;
@@ -2515,18 +2567,22 @@ void MainWindow::DrawTitleBar(const D2D1_RECT_F& bar, float a) {
         if (!isTab0 && m_tabs[i].canClose) {
             const float closeSz = Dp(16.0f);
             closeRc = RcWH(tabRc.right - closeSz - Dp(5), tabRc.top + (tabH - closeSz) * 0.5f, closeSz, closeSz);
-            m_rcTabCloses.push_back(closeRc);
-
-            const uint32_t cid = Id("tab.close", (uint32_t)i);
-            closeClicked = m_ui.Button(cid, closeRc);
-            if (m_ui.Hot(cid)) {
-                m_r.FillRound(closeRc, Dp(4), theme::Danger, 0.85f * a);
-                DrawIcon(m_r, Icon::Close, closeRc, Dp(11.0f), theme::White, a);
-            } else {
-                DrawIcon(m_r, Icon::Close, closeRc, Dp(11.0f), theme::TextDim, 0.8f * a);
+            const D2D1_RECT_F closeHitRc = Rc(
+                std::max(closeRc.left, clipBounds.left),
+                std::max(closeRc.top, clipBounds.top),
+                std::min(closeRc.right, clipBounds.right),
+                std::min(closeRc.bottom, clipBounds.bottom));
+            if (closeHitRc.right > closeHitRc.left + Dp(4.0f)) {
+                m_rcTabCloses[i] = closeHitRc;
+                const uint32_t cid = Id("tab.close", (uint32_t)i);
+                closeClicked = m_ui.Button(cid, closeHitRc);
+                if (m_ui.Hot(cid)) {
+                    m_r.FillRound(closeRc, Dp(4), theme::Danger, 0.85f * a);
+                    DrawIcon(m_r, Icon::Close, closeRc, Dp(11.0f), theme::White, a);
+                } else {
+                    DrawIcon(m_r, Icon::Close, closeRc, Dp(11.0f), theme::TextDim, 0.8f * a);
+                }
             }
-        } else {
-            m_rcTabCloses.push_back(D2D1_RECT_F{});
         }
 
         const float textLeft = tabRc.left + Dp(26.0f);
@@ -2538,13 +2594,97 @@ void MainWindow::DrawTitleBar(const D2D1_RECT_F& bar, float a) {
         }
 
         if (closeClicked) {
-            CloseTab((int)i);
-            break;
+            tabToClose = (int)i;
         } else if (tabClicked) {
-            ActivateTab((int)i);
+            tabToActivate = (int)i;
+        } else if (!m_tabs[i].title.empty()) {
+            m_ui.Tip(tid, m_tabs[i].title, hitRc);
+        }
+    };
+
+    // 1) Sabit Sekme 0 (Kutuphane)
+    if (numTabs > 0) {
+        const D2D1_RECT_F tab0Rc = RcWH(m_rcTabsArea.left, tabY, tab0W, tabH);
+        drawSingleTab(0, tab0Rc, m_rcTabsArea);
+    }
+
+    // 2) Kaydirilabilir Sekmeler (i >= 1)
+    if (numTabs > 1) {
+        const size_t extraCount = numTabs - 1;
+        const float sepX = m_rcTabsArea.left + tab0W + Dp(3.5f);
+        m_r.Line(sepX, tabY + Dp(4.0f), sepX, tabY + tabH - Dp(4.0f), theme::Border, 1.0f, 0.45f * a);
+
+        const float stripAreaLeft = m_rcTabsArea.left + tab0W + Dp(7.0f);
+        const float stripAreaRight = m_rcTabsArea.right;
+        const float rawAvailW = std::max(0.0f, stripAreaRight - stripAreaLeft);
+
+        const float maxTabW = Dp(165.0f);
+        const float minTabW = Dp(135.0f);
+        const float fitW = (rawAvailW - tabGap * (float)(extraCount - 1)) / (float)extraCount;
+        const float otherW = std::clamp(fitW, minTabW, maxTabW);
+        const float totalExtraW = (float)extraCount * otherW + (float)(extraCount - 1) * tabGap;
+
+        const bool overflows = (totalExtraW > rawAvailW + 0.5f);
+        if (overflows) {
+            const float navBtnW = Dp(24.0f);
+            m_rcTabScrollLeft = RcWH(stripAreaLeft, tabY, navBtnW, tabH);
+            m_rcTabScrollRight = RcWH(stripAreaRight - navBtnW, tabY, navBtnW, tabH);
+            m_rcTabScrollStrip = Rc(m_rcTabScrollLeft.right + Dp(3.0f), bar.top, m_rcTabScrollRight.left - Dp(3.0f), bar.bottom);
+        } else {
+            m_rcTabScrollStrip = Rc(stripAreaLeft, bar.top, stripAreaRight, bar.bottom);
         }
 
-        curX += tw + Dp(3.0f);
+        const float stripW = std::max(Dp(20.0f), RcW(m_rcTabScrollStrip));
+        m_tabMaxScrollX = overflows ? std::max(0.0f, totalExtraW - stripW) : 0.0f;
+
+        if (m_tabEnsureVisible >= 1 && m_tabEnsureVisible < (int)numTabs) {
+            const float tabStart = (float)(m_tabEnsureVisible - 1) * (otherW + tabGap);
+            const float tabEnd = tabStart + otherW;
+            if (tabStart < m_tabScrollX) {
+                m_tabScrollX = tabStart;
+            } else if (tabEnd > m_tabScrollX + stripW) {
+                m_tabScrollX = tabEnd - stripW;
+            }
+            m_tabEnsureVisible = -1;
+        } else if (m_tabEnsureVisible == 0) {
+            m_tabEnsureVisible = -1;
+        }
+
+        m_tabScrollX = std::clamp(m_tabScrollX, 0.0f, m_tabMaxScrollX);
+
+        if (overflows) {
+            const bool canLeft = (m_tabScrollX > 0.5f);
+            const bool canRight = (m_tabScrollX < m_tabMaxScrollX - 0.5f);
+            if (w::IconButton(m_r, m_ui, Id("tab.scroll.left"), m_rcTabScrollLeft, Icon::ChevronLeft, Dp(14),
+                              i18n::Literal(L"Sekmeleri sola kaydır (Fare tekerleği)"), false, canLeft, a, Dp(6))) {
+                m_tabScrollX = std::max(0.0f, m_tabScrollX - (otherW + tabGap) * 1.5f);
+                m_dirty = true;
+            }
+            if (w::IconButton(m_r, m_ui, Id("tab.scroll.right"), m_rcTabScrollRight, Icon::ChevronRight, Dp(14),
+                              i18n::Literal(L"Sekmeleri sağa kaydır (Fare tekerleği)"), false, canRight, a, Dp(6))) {
+                m_tabScrollX = std::min(m_tabMaxScrollX, m_tabScrollX + (otherW + tabGap) * 1.5f);
+                m_dirty = true;
+            }
+        }
+
+        m_r.PushClip(m_rcTabScrollStrip);
+        for (size_t i = 1; i < numTabs; ++i) {
+            const float curX = m_rcTabScrollStrip.left + (float)(i - 1) * (otherW + tabGap) - m_tabScrollX;
+            const D2D1_RECT_F tabRc = RcWH(curX, tabY, otherW, tabH);
+            if (tabRc.right <= m_rcTabScrollStrip.left || tabRc.left >= m_rcTabScrollStrip.right) continue;
+            drawSingleTab(i, tabRc, m_rcTabScrollStrip);
+        }
+        m_r.PopClip();
+    } else {
+        m_tabScrollX = 0.0f;
+        m_tabMaxScrollX = 0.0f;
+        m_tabEnsureVisible = -1;
+    }
+
+    if (tabToClose >= 1) {
+        CloseTab(tabToClose);
+    } else if (tabToActivate >= 0) {
+        ActivateTab(tabToActivate);
     }
 
     if (w::IconButton(m_r, m_ui, Id("title.full"), m_rcFull, Icon::FitWindow, Dp(18), m_fullscreen ? i18n::Literal(L"Tam ekrandan çık (F11)") : i18n::Literal(L"Tam ekran (F11)"), m_fullscreen, true, a, Dp(6))) ToggleFullscreen();
@@ -2732,30 +2872,20 @@ void MainWindow::DrawReaderTabLoading(const D2D1_RECT_F& area, const AppTab& tab
                  Renderer::Align::Center);
         y += 30.0f * s;
 
-        const float btnW = 125.0f * s;
+        const float btnW = 115.0f * s;
+        const float webBtnW = 135.0f * s;
+        const float closeBtnW = 90.0f * s;
         const float btnH = 34.0f * s;
-        const float gap = 8.0f * s;
-        const float totalBtnW = btnW * 3.0f + gap * 2.0f;
+        const float gap = 6.0f * s;
+        const float totalBtnW = btnW * 2.0f + webBtnW + closeBtnW + gap * 3.0f;
         const float btnX0 = card.left + (cardW - totalBtnW) * 0.5f;
 
         const D2D1_RECT_F retryRc = RcWH(btnX0, y, btnW, btnH);
         const D2D1_RECT_F cfRc = RcWH(retryRc.right + gap, y, btnW, btnH);
-        const D2D1_RECT_F closeRc = RcWH(cfRc.right + gap, y, btnW, btnH);
+        const D2D1_RECT_F webRc = RcWH(cfRc.right + gap, y, webBtnW, btnH);
+        const D2D1_RECT_F closeRc = RcWH(webRc.right + gap, y, closeBtnW, btnH);
 
-        if (w::TextButton(m_r, m_ui, Id("tab.load.retry"), retryRc, i18n::Literal(L"🔄 Yeniden Dene"), true)) {
-            std::string mirror = tab.mirror;
-            std::string mangaUrl = tab.mangaUrl;
-            std::wstring title = tab.mangaTitle;
-            std::string chapUrl = tab.chapterUrl;
-            int curActive = m_activeTab;
-            if (curActive > 0 && curActive < (int)m_tabs.size()) {
-                m_tabs[curActive].failed = false;
-                m_tabs[curActive].loading = true;
-                m_tabs[curActive].statusMessage = i18n::Literal(L"Yeniden bağlanılıyor...");
-                OpenOnlineManga(mirror, mangaUrl, title, chapUrl);
-            }
-        }
-        if (w::TextButton(m_r, m_ui, Id("tab.load.cf"), cfRc, i18n::Literal(L"🛡️ Doğrula"), false)) {
+        auto resolveTabUrl = [&]() -> std::string {
             std::string targetUrl = tab.chapterUrl;
             if (targetUrl.empty() || targetUrl == "__FIRST__" || targetUrl == "__LAST__") {
                 if (!tab.chapters.empty()) {
@@ -2773,9 +2903,32 @@ void MainWindow::DrawReaderTabLoading(const D2D1_RECT_F& area, const AppTab& tab
                     targetUrl = origin + targetUrl;
                 }
             }
-            ShowChallengeVerification(targetUrl, tab.mangaTitle, "images");
+            return targetUrl.empty() ? tab.mangaUrl : targetUrl;
+        };
+
+        if (w::TextButton(m_r, m_ui, Id("tab.load.retry"), retryRc, i18n::Literal(L"🔄 Yeniden Dene"), true)) {
+            std::string mirror = tab.mirror;
+            std::string mangaUrl = tab.mangaUrl;
+            std::wstring title = tab.mangaTitle;
+            std::string chapUrl = tab.chapterUrl;
+            int curActive = m_activeTab;
+            if (curActive > 0 && curActive < (int)m_tabs.size()) {
+                m_tabs[curActive].failed = false;
+                m_tabs[curActive].loading = true;
+                m_tabs[curActive].statusMessage = i18n::Literal(L"Yeniden bağlanılıyor...");
+                OpenOnlineManga(mirror, mangaUrl, title, chapUrl);
+            }
+        }
+        if (w::TextButton(m_r, m_ui, Id("tab.load.cf"), cfRc, i18n::Literal(L"🛡️ Doğrula"), false)) {
+            ShowChallengeVerification(resolveTabUrl(), tab.mangaTitle, "images");
         }
         m_ui.Tip(Id("tab.load.cf"), i18n::Literal(L"Cloudflare Robot Doğrulamasını Aç"), cfRc);
+
+        if (w::TextButton(m_r, m_ui, Id("tab.load.openweb"), webRc, i18n::Literal(L"🌐 Tarayıcıda Aç"), false)) {
+            const std::string targetUrl = resolveTabUrl();
+            if (!targetUrl.empty()) OpenUrl(FromUtf8(targetUrl));
+        }
+        m_ui.Tip(Id("tab.load.openweb"), i18n::Literal(L"Bu bölümü/mangayı sistemin varsayılan tarayıcısında aç"), webRc);
 
         if (w::TextButton(m_r, m_ui, Id("tab.load.close"), closeRc, i18n::Literal(L"✕ Kapat"), false)) {
             CloseTab(m_activeTab);
@@ -2804,17 +2957,19 @@ void MainWindow::DrawReaderTabLoading(const D2D1_RECT_F& area, const AppTab& tab
                  theme::TextMuted, 11.5f * s, Renderer::Align::Center);
         y += 20.0f * s;
 
-        const float cfBtnW = 150.0f * s;
-        const float closeBtnW = 110.0f * s;
+        const float cfBtnW = 145.0f * s;
+        const float webBtnW = 135.0f * s;
+        const float closeBtnW = 95.0f * s;
         const float btnH = 30.0f * s;
-        const float gap = 10.0f * s;
-        const float totalBtnW = cfBtnW + closeBtnW + gap;
+        const float gap = 8.0f * s;
+        const float totalBtnW = cfBtnW + webBtnW + closeBtnW + gap * 2.0f;
         const float btnX0 = card.left + (cardW - totalBtnW) * 0.5f;
 
         const D2D1_RECT_F cfRc = RcWH(btnX0, y, cfBtnW, btnH);
-        const D2D1_RECT_F closeRc = RcWH(cfRc.right + gap, y, closeBtnW, btnH);
+        const D2D1_RECT_F webRc = RcWH(cfRc.right + gap, y, webBtnW, btnH);
+        const D2D1_RECT_F closeRc = RcWH(webRc.right + gap, y, closeBtnW, btnH);
 
-        if (w::TextButton(m_r, m_ui, Id("tab.load.cf"), cfRc, i18n::Literal(L"🛡️ Doğrulamayı Aç"), false)) {
+        auto resolveLoadingUrl = [&]() -> std::string {
             std::string targetUrl = tab.chapterUrl;
             if (targetUrl.empty() || targetUrl == "__FIRST__" || targetUrl == "__LAST__") {
                 if (!tab.chapters.empty()) {
@@ -2832,9 +2987,19 @@ void MainWindow::DrawReaderTabLoading(const D2D1_RECT_F& area, const AppTab& tab
                     targetUrl = origin + targetUrl;
                 }
             }
-            ShowChallengeVerification(targetUrl, tab.mangaTitle, "images");
+            return targetUrl.empty() ? tab.mangaUrl : targetUrl;
+        };
+
+        if (w::TextButton(m_r, m_ui, Id("tab.load.cf"), cfRc, i18n::Literal(L"🛡️ Doğrulamayı Aç"), false)) {
+            ShowChallengeVerification(resolveLoadingUrl(), tab.mangaTitle, "images");
         }
         m_ui.Tip(Id("tab.load.cf"), i18n::Literal(L"Sayfa Cloudflare robot kontrolüne takıldıysa doğrulamayı aç"), cfRc);
+
+        if (w::TextButton(m_r, m_ui, Id("tab.load.openweb"), webRc, i18n::Literal(L"🌐 Tarayıcıda Aç"), false)) {
+            const std::string targetUrl = resolveLoadingUrl();
+            if (!targetUrl.empty()) OpenUrl(FromUtf8(targetUrl));
+        }
+        m_ui.Tip(Id("tab.load.openweb"), i18n::Literal(L"Bu bölümü/mangayı sistemin varsayılan tarayıcısında aç"), webRc);
 
         if (w::TextButton(m_r, m_ui, Id("tab.load.cancel"), closeRc, i18n::Literal(L"✕ Kapat"), false)) {
             CloseTab(m_activeTab);
@@ -2903,7 +3068,8 @@ LRESULT MainWindow::HitTest(int x, int y) {
     }
     if (y < (int)Dp(theme::TitleH)) {
         const float fx = (float)x, fy = (float)y;
-        if (RcHit(m_rcMenu, fx, fy) || RcHit(m_rcFull, fx, fy) || RcHit(m_rcMin, fx, fy) || RcHit(m_rcMax, fx, fy) || RcHit(m_rcClose, fx, fy))
+        if (RcHit(m_rcMenu, fx, fy) || RcHit(m_rcFull, fx, fy) || RcHit(m_rcMin, fx, fy) || RcHit(m_rcMax, fx, fy) || RcHit(m_rcClose, fx, fy) ||
+            RcHit(m_rcTabScrollLeft, fx, fy) || RcHit(m_rcTabScrollRight, fx, fy))
             return HTCLIENT;
         for (const auto& btn : m_rcTabButtons) {
             if (RcHit(btn, fx, fy)) return HTCLIENT;
@@ -3495,6 +3661,15 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         const float notches = (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA;
         const bool ctrl = (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) != 0;
         const bool shift = (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT) != 0 || msg == WM_MOUSEHWHEEL;
+        const float fx = (float)pt.x, fy = (float)pt.y;
+        const bool overTitle = !m_fullscreen ? (fy >= 0.0f && fy < Dp(theme::TitleH))
+                                             : (fy >= 0.0f && fy < Dp(theme::TitleH) && ActiveReader()->ChromeAlpha() > 0.05f);
+        if (overTitle && RcHit(m_rcTabsArea, fx, fy) && m_tabMaxScrollX > 0.5f) {
+            const float dir = (msg == WM_MOUSEHWHEEL) ? notches : -notches;
+            m_tabScrollX = std::clamp(m_tabScrollX + dir * Dp(96.0f), 0.0f, m_tabMaxScrollX);
+            m_dirty = true;
+            return 0;
+        }
         if (m_view == View::Reader && ActiveReader()->IsOpen() && !m_drawerOpen) {
             ActiveReader()->WakeChrome(Now());
             ActiveReader()->OnWheel(msg == WM_MOUSEHWHEEL ? -notches : notches, ctrl, shift, (float)pt.x, (float)pt.y);

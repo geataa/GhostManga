@@ -112,6 +112,11 @@ bool MirrorEngine::Init() {
             return url;
         };
         for (const source of globalThis.__loader.mirrors || []) {
+            if (source.mirrorName === 'Test Site' ||
+                (source.mirrorName === 'Tachidesk' && !globalThis.mirrorHelper.getOption('tachideskUrl')) ||
+                (source.mirrorName === 'Komga' && !globalThis.mirrorHelper.getOption('komgaUrl'))) {
+                source.disabled = true;
+            }
             source.home = canonicalHome(source.home);
             if (source.options) for (const key of ['base_url', 'search_url']) {
                 if (Object.prototype.hasOwnProperty.call(source.options, key)) {
@@ -119,6 +124,25 @@ bool MirrorEngine::Init() {
                     source.options[key] = key === 'base_url' || /^https?:\/\/[^/]+\/?$/.test(value)
                         ? value.replace(/\/?$/, '/') : value;
                 }
+            }
+            if (source.mirrorName === 'Mangakakalot' || source.mirrorName === 'Manganelo') {
+                source.searchPage = function($) {
+                    const res = [];
+                    $(this.options.series_list_selector + ', .story_item .story_name a, .search-story-item a.item-title').each((_, el) => {
+                        const node = $(el);
+                        const href = node.attr('href');
+                        if (!href) return;
+                        try { res.push([node.text().trim(), new URL(href, this.options.base_url || this.home).href]); } catch (e) {}
+                    });
+                    return res;
+                };
+            }
+            if (typeof source.makeChapterUrl === 'function' && source.home) {
+                const origMake = source.makeChapterUrl.bind(source);
+                source.makeChapterUrl = function(u) {
+                    try { u = new URL(String(u || ''), this.home).href; } catch (e) {}
+                    return origMake(u);
+                };
             }
         }
 
@@ -229,7 +253,9 @@ bool MirrorEngine::Init() {
                 return [];
             }
         };
+    )JS";
 
+    const char* initScript2 = R"JS(
         globalThis.__getChapterImages = async function(mirrorName, chapterUrl) {
             let impl = await globalThis.__findImpl(mirrorName);
             if (!impl && chapterUrl) {
@@ -273,8 +299,58 @@ bool MirrorEngine::Init() {
                 }
 
                 // 2. Fallback to mirror implementation getListImages
-                const res = await impl.getListImages(doc, chapterUrl, null);
-                if (!Array.isArray(res) || res.length === 0) return [];
+                let res = await impl.getListImages(doc, chapterUrl, null);
+                if (!Array.isArray(res)) res = [];
+
+                const isPlaceholderUrl = u => {
+                    const low = String(u || "").trim().toLowerCase();
+                    return !low || low.startsWith("data:image/") || low.startsWith("data:text") ||
+                        low.includes("blank.gif") || low.includes("pixel.gif") || low.includes("spacer.gif") ||
+                        low.includes("loading.") || low.includes("placeholder") || low.includes("1x1");
+                };
+
+                // If mirror implementation returned 0 or only 1-3 images (due to lazy-load / ts_reader changes), check static fallbacks
+                const initialValidCount = res.filter(u => !isPlaceholderUrl(u) && !String(u).includes(".html")).length;
+                if (initialValidCount <= 3 && doc && doc.length > 100) {
+                    const extra = [];
+                    const seenExtra = new Set();
+                    const pushExtra = u => {
+                        u = String(u || "").trim();
+                        if (!u || isPlaceholderUrl(u) || u.includes(".html") || u.includes(".htm")) return;
+                        try { u = new URL(u, chapterUrl).href; } catch(e) {}
+                        if (!seenExtra.has(u)) { seenExtra.add(u); extra.push(u); }
+                    };
+                    if (doc.includes("ts_reader.run(")) {
+                        const m = doc.match(/ts_reader\.run\(\s*(\{[\s\S]*?\})\s*\)/);
+                        if (m) {
+                            try {
+                                const parsed = JSON.parse(m[1]);
+                                if (parsed && Array.isArray(parsed.sources)) {
+                                    for (const s of parsed.sources) {
+                                        if (s && Array.isArray(s.images)) for (const img of s.images) pushExtra(img);
+                                    }
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                    if (extra.length === 0) {
+                        try {
+                            const $ = globalThis.cheerio.load(doc);
+                            const sels = ['#readerarea img', '.reading-content img', '.wp-manga-chapter-img', '.chapter-content img', '.page-break img', '.container-chapter-reader img'];
+                            for (const sel of sels) {
+                                const nodes = $(sel);
+                                if (nodes.length >= 4) {
+                                    nodes.each((i, el) => { pushExtra($(el).attr('src')); });
+                                    if (extra.length >= 4) break;
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                    if (extra.length > initialValidCount && (initialValidCount === 0 || extra.length >= 4)) {
+                        res = extra;
+                    }
+                }
+                if (res.length === 0) return [];
 
                 // Check if getListImages returned HTML page URLs (e.g. MangaHere / FanFox with .html)
                 const hasHtml = res.some(u => String(u).includes(".html") || String(u).includes(".htm"));
@@ -365,9 +441,9 @@ bool MirrorEngine::Init() {
                     return [];
                 }
 
-                // Filter out any non-image URLs
+                // Filter out any non-image or placeholder URLs
                 return res.map(url => String(url || "").trim())
-                          .filter(url => url.length > 0 && !url.includes(".html") && !url.includes(".htm") && !url.startsWith("data:text"));
+                          .filter(url => url.length > 0 && !isPlaceholderUrl(url) && !url.includes(".html") && !url.includes(".htm"));
             } catch(e) {
                 console.error("[getChapterImages error]", e);
                 globalThis.__lastMirrorError = String(e.message || e);
@@ -376,7 +452,7 @@ bool MirrorEngine::Init() {
         };
     )JS";
 
-    JSValue rInit = m_engine.Eval(initScript, "<initScript>");
+    JSValue rInit = m_engine.Eval(std::string(initScript) + initScript2, "<initScript>");
     JS_FreeValue(m_engine.Ctx(), rInit);
 
     {
@@ -400,6 +476,41 @@ bool MirrorEngine::Init() {
         }
     }
     m_initialized = true;
+    if (m_cachedMirrorsCount.load(std::memory_order_acquire) == 0 && m_cachedMirrors.empty()) {
+        JSValue global = JS_GetGlobalObject(m_engine.Ctx());
+        JSValue fn = JS_GetPropertyStr(m_engine.Ctx(), global, "__getAllMirrors");
+        JS_FreeValue(m_engine.Ctx(), global);
+        if (JS_IsFunction(m_engine.Ctx(), fn)) {
+            JSValue res = m_engine.Call(fn, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(m_engine.Ctx(), fn);
+            std::string jsonStr = m_engine.ToJson(res);
+            JS_FreeValue(m_engine.Ctx(), res);
+            json::Value v;
+            std::string err;
+            if (json::Parse(jsonStr, v, &err) && v.IsArray()) {
+                for (const auto& item : v.arr) {
+                    if (!item.IsObject()) continue;
+                    MirrorInfo info;
+                    if (const auto* n = item.Get("name")) info.name = n->AsString();
+                    if (const auto* l = item.Get("language")) info.language = l->AsString();
+                    if (const auto* h = item.Get("home")) info.home = h->AsString();
+                    if (const auto* h = item.Get("imageReferer")) info.imageReferer = h->AsString();
+                    if (const auto* c = item.Get("canListFullMangas")) info.canListFullMangas = c->AsBool();
+                    if (const auto* d = item.Get("disabled")) info.disabled = d->AsBool();
+                    if (const auto* i = item.Get("iconDataUrl")) info.iconDataUrl = i->AsString();
+                    if (const auto* dom = item.Get("domains")) {
+                        if (dom->IsArray()) {
+                            for (const auto& di : dom->arr) info.domains.push_back(di.AsString());
+                        }
+                    }
+                    m_cachedMirrors.push_back(std::move(info));
+                }
+            }
+            m_cachedMirrorsCount.store(m_cachedMirrors.size(), std::memory_order_release);
+        } else {
+            JS_FreeValue(m_engine.Ctx(), fn);
+        }
+    }
     log::Write(L"MirrorEngine basariyla baslatildi.");
     return true;
 }
@@ -540,7 +651,7 @@ std::vector<ChapterInfo> MirrorEngine::GetChapters(const std::string& mirrorName
     if (!m_initialized && !Init()) return {};
 
     JS_UpdateStackTop(m_engine.Rt());
-    m_engine.SetTimeoutSeconds(30);
+    m_engine.SetTimeoutSeconds(20);
     JSValue resetError = m_engine.Eval("globalThis.__lastMirrorError = '';", "<operation>");
     JS_FreeValue(m_engine.Ctx(), resetError);
     JSValue global = JS_GetGlobalObject(m_engine.Ctx());
@@ -570,8 +681,8 @@ std::vector<ChapterInfo> MirrorEngine::GetChapters(const std::string& mirrorName
     if (JS_IsPromise(promise)) {
         auto startWait = std::chrono::steady_clock::now();
         while (JS_PromiseState(m_engine.Ctx(), promise) == JS_PROMISE_PENDING) {
-            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 30 || m_engine.RemainingMilliseconds() <= 0) {
-                log::Write(L"[MirrorEngine] GetChapters timeout (10s) reached, breaking wait");
+            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 20 || m_engine.RemainingMilliseconds() <= 0) {
+                log::Write(L"[MirrorEngine] GetChapters timeout (20s) reached, breaking wait");
                 break;
             }
             if (m_engine.RunJobs() == 0) {
@@ -617,7 +728,7 @@ std::vector<std::string> MirrorEngine::GetChapterImages(const std::string& mirro
     if (!m_initialized && !Init()) return {};
 
     JS_UpdateStackTop(m_engine.Rt());
-    m_engine.SetTimeoutSeconds(60);
+    m_engine.SetTimeoutSeconds(25);
     JSValue resetError = m_engine.Eval("globalThis.__lastMirrorError = '';", "<operation>");
     JS_FreeValue(m_engine.Ctx(), resetError);
     JSValue global = JS_GetGlobalObject(m_engine.Ctx());
@@ -645,8 +756,8 @@ std::vector<std::string> MirrorEngine::GetChapterImages(const std::string& mirro
     if (JS_IsPromise(promise)) {
         auto startWait = std::chrono::steady_clock::now();
         while (JS_PromiseState(m_engine.Ctx(), promise) == JS_PROMISE_PENDING) {
-            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 60 || m_engine.RemainingMilliseconds() <= 0) {
-                log::Write(L"[MirrorEngine] GetChapterImages timeout (10s) reached, breaking wait");
+            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 25 || m_engine.RemainingMilliseconds() <= 0) {
+                log::Write(L"[MirrorEngine] GetChapterImages timeout (25s) reached, breaking wait");
                 break;
             }
             if (m_engine.RunJobs() == 0) {

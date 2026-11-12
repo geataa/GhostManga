@@ -1601,6 +1601,14 @@ void ReaderView::DrawRightSidebar(Renderer& r, Ui& ui, const D2D1_RECT_F& sbRc, 
     if (w::TextButton(r, ui, Id("sb.reload"), reloadRc, i18n::Literal(L"🔄 Resimleri Baştan Yükle"), false)) {
         if (m_host) m_host->ReloadCurrentChapter();
     }
+    curY += 32.0f * s + 8.0f * s;
+
+    // [ 🌐 Tarayıcıda Aç ↗ ]
+    const D2D1_RECT_F openWebRc = RcWH(sbRc.left + pad, curY, contentW, 32.0f * s);
+    if (w::TextButton(r, ui, Id("sb.openweb"), openWebRc, i18n::Literal(L"🌐 Tarayıcıda Aç ↗"), false)) {
+        if (m_host) m_host->OpenCurrentInDefaultBrowser();
+    }
+    ui.Tip(Id("sb.openweb"), i18n::Literal(L"Bu bölümü/mangayı sistemin varsayılan tarayıcısında aç"), openWebRc);
     curY += 32.0f * s + 18.0f * s;
 
     // 9. Yukleme Durumu ve Ilerleme

@@ -88,6 +88,7 @@ public:
     void AddBookmark(const std::wstring& seriesName, const std::wstring& chapterName, int pageIndex) override;
     void DownloadChapter(const std::wstring& chapterDir, const std::wstring& seriesName, const std::wstring& chapterName) override;
     void ReloadCurrentChapter() override;
+    void OpenCurrentInDefaultBrowser() override;
     bool NavigateChapter(int delta) override;
     bool OpenChapterByIndex(int index) override;
     const std::vector<OnlineChapter>& GetCurrentChapters() const override;
@@ -230,6 +231,12 @@ private:
     std::vector<AppTab> m_tabs;
     int m_activeTab = 0;
     D2D1_RECT_F m_rcTabsArea{};
+    float m_tabScrollX = 0.0f;
+    float m_tabMaxScrollX = 0.0f;
+    int m_tabEnsureVisible = -1;
+    D2D1_RECT_F m_rcTabScrollLeft{};
+    D2D1_RECT_F m_rcTabScrollRight{};
+    D2D1_RECT_F m_rcTabScrollStrip{};
     std::vector<D2D1_RECT_F> m_rcTabButtons;
     std::vector<D2D1_RECT_F> m_rcTabCloses;
 
