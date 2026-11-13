@@ -211,7 +211,7 @@ void SettingsView::Draw(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& 
         }
         y += 140*s;
         note(i18n::Literal(L"Denetim zamanı saklanır. Süresi geçmişse açılıştan 30 saniye sonra kontrol edilir."));
-        if (w::TextButton(r, ui, Id("set.scannow"), Rc(cl, y, cl + 260 * s, y + 38 * s), T(S::ManualScanNow), true)) {
+        if (w::TextButton(r, ui, Id("set.scannow"), Rc(cl, y, cl + 260 * s, y + 38 * s), host.IsCheckingUpdates() ? (host.UpdateCheckTotal() > 0 ? (L"⏳ " + std::wstring(i18n::Literal(L"Denetleniyor")) + L" (" + std::to_wstring(host.UpdateCheckCompleted()) + L"/" + std::to_wstring(host.UpdateCheckTotal()) + L")...") : std::wstring(i18n::Literal(L"⏳ Denetleniyor..."))) : std::wstring(T(S::ManualScanNow)), !host.IsCheckingUpdates(), !host.IsCheckingUpdates())) {
             host.CheckUpdatesNow();
         }
         y += 52.0f * s;

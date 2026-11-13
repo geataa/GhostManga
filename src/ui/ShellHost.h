@@ -43,6 +43,15 @@ public:
     virtual void CrawlChaptersForManga(const std::string& mangaUrl, std::function<void(const std::vector<std::pair<std::string, std::string>>&)> callback) = 0;
     virtual void SaveSettings() = 0;
     virtual void LanguageChanged() = 0;
+
+    // Guncelleme denetimi durumu, hedef odakli denetim ve elle dogrulama
+    virtual bool IsCheckingUpdates() const { return false; }
+    virtual int UpdateCheckCompleted() const { return 0; }
+    virtual int UpdateCheckTotal() const { return 0; }
+    virtual void CheckSpecificSeries(const std::vector<std::string>& keys) { (void)keys; }
+    virtual void VerifySourceInteractive(const std::string& seriesKey, const std::string& mirror, const std::string& url, const std::wstring& title) {
+        (void)seriesKey; (void)mirror; (void)url; (void)title;
+    }
 };
 
 } // namespace gm

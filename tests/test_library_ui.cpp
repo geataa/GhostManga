@@ -77,12 +77,16 @@ struct LibraryViewTestAccess {
  static void SetResult(LibraryView& view, const LibraryView::GroupedSearchItem& result) { view.EnsureSearchTab(); view.m_activeSearch->results = {result}; }
  static size_t Selected(LibraryView& view) { return view.m_activeSearch->results[0].selectedMirrorIdx; }
  static void Draw(LibraryView& view, Renderer& renderer, Ui& ui, const D2D1_RECT_F& area, ShellHost& host, Settings& settings, Library& library, double now) { view.DrawSearchTab(renderer,ui,area,host,settings,library,now); }
+ static void FullDraw(LibraryView& view, Renderer& renderer, Ui& ui, const D2D1_RECT_F& area, ShellHost& host, Settings& settings, Library& library, double now) { view.Draw(renderer,ui,area,settings,library,host,now); }
+ static const auto& SubListTargets(const LibraryView& view) { return view.m_subListDropTargets; }
+ static const auto& GroupTargets(const LibraryView& view) { return view.m_groupDropTargets; }
 };
 }
 using namespace gm;
 
 struct TestHost : ShellHost {
  Library& library; int added=0; int opened=0; std::string openedChapter;std::wstring openedPath;int openedPaths=0;int deletedPaths=0,saved=0;std::wstring deletedPath;std::vector<std::string> removedSeries;
+ bool checkingNow=false; int checkUpdatesCalls=0; std::vector<std::string> lastSpecificChecked;
  explicit TestHost(Library& value):library(value){}
  void Toast(const std::wstring& msg) override {}
  void Invalidate() override {}
@@ -93,7 +97,11 @@ struct TestHost : ShellHost {
  void OpenDataFolder() override {}
  void OpenDownloadsFolder() override {}
  void PurgeCache() override {}
- void CheckUpdatesNow() override {}
+ void CheckUpdatesNow() override { ++checkUpdatesCalls; }
+ bool IsCheckingUpdates() const override { return checkingNow; }
+ int UpdateCheckCompleted() const override { return checkingNow ? 2 : 0; }
+ int UpdateCheckTotal() const override { return checkingNow ? 5 : 0; }
+ void CheckSpecificSeries(const std::vector<std::string>& keys) override { lastSpecificChecked = keys; }
  void OpenSitesCatalog() override {}
  void OpenUrl(const std::wstring& url) override {}
  void OpenPath(const std::wstring& dir) override {openedPath=dir;++openedPaths;}
@@ -375,6 +383,77 @@ int main(int argc,char** argv) {
  asyncView.SearchOtherSources(L"Replacement",host);auto replacement=LibraryViewTestAccess::Session(asyncView);
  while(replacement->searching && std::chrono::steady_clock::now()<until)std::this_thread::sleep_for(std::chrono::milliseconds(10));
  asyncView.StopWorkers();assert(cancelled->results.empty() && cancelled->status==cancelledStatus);assert(replacement->results.size()==1 && replacement->results[0].titleW==L"Replacement");
+
+ // MANGA-17: Group highest chapter & card last-read, active scan lock, targeted group check, and Drag & Drop (onto Group Header & Sub-List pill)
+ {
+  Library dragLib;
+  const auto dragPath = paths::Join(paths::DataDir(), L"drag-ui-library.json");
+  DeleteFileW(dragPath.c_str()); DeleteFileW((dragPath + L".bak").c_str());
+  dragLib.Load(dragPath);
+  auto makeS=[](const std::string& name, const std::string& mirror, const std::string& url, const std::string& lastCh, const std::string& latestCh, int64_t ts){
+   Series s; s.name=name; s.mirror=mirror; s.url=url; s.language="en";
+   s.key=amr::MangaKey(mirror, url, "en");
+   s.lastChapterUrl=lastCh; s.latestChapterUrl=latestCh; s.upts=ts;
+   return s;
+  };
+  assert(dragLib.AddSeries(makeS("Berserk", "Asura", "https://asura.invalid/berserk", "https://asura.invalid/berserk/chapter-42", "https://asura.invalid/berserk/chapter-364", 1700000300)));
+  assert(dragLib.AddSeries(makeS("Berserk", "MangaDex", "https://md.invalid/berserk", "https://md.invalid/berserk/chapter-18", "https://md.invalid/berserk/chapter-375", 1700000200)));
+  assert(dragLib.AddSeries(makeS("Kuroi Kenshi", "TCB", "https://tcb.invalid/kuroi", "https://tcb.invalid/kuroi/chapter-10", "https://tcb.invalid/kuroi/chapter-50", 1700000100)));
+  assert(dragLib.AddCustomList("OkumaGrubu"));
+
+  Settings dragSet; dragSet.libraryGroup=true; dragSet.libraryViewMode=0; dragSet.librarySort=0; dragSet.librarySortDesc=true;
+  LibraryView dragView; TestHost dragHost(dragLib);
+  renderer.Resize(1280, 720);
+  const auto wideArea = Rc(0, 0, 1280, 720);
+  auto dragFrame=[&](const Input& in){
+   ui.Begin(in, now+=0.05); assert(renderer.Begin());
+   LibraryViewTestAccess::FullDraw(dragView, renderer, ui, wideArea, dragHost, dragSet, dragLib, now);
+   renderer.End(); ui.End();
+  };
+  dragFrame(Input{});
+  const auto& gItems = LibraryViewTestAccess::Items(dragView);
+  assert(gItems.size()==2 && gItems[0].isGroupHeader && gItems[0].childCount==2);
+  assert(gItems[0].maxChapNum==375.0 && gItems[0].bestLatestLabel.find(L"375")!=std::wstring::npos);
+  assert(gItems[0].maxReadNum==42.0 && gItems[0].bestReadLabel.find(L"42")!=std::wstring::npos);
+
+  // Active scan lock: check button at (1100, 162) is inactive while checkingNow == true, active when false
+  dragHost.checkingNow=true; dragFrame(Input{});
+  dragFrame(Input{1100,162,true,true,false}); dragFrame(Input{1100,162,false,false,true});
+  assert(dragHost.checkUpdatesCalls==0);
+  dragHost.checkingNow=false; dragFrame(Input{});
+  dragFrame(Input{1100,162,true,true,false}); dragFrame(Input{1100,162,false,false,true});
+  assert(dragHost.checkUpdatesCalls==1);
+
+  // Drag standalone series ("Kuroi Kenshi", target[1]) onto Group Header ("Berserk", target[0]) -> merges into 3-source group
+  assert(LibraryViewTestAccess::GroupTargets(dragView).size()==2);
+  const auto grpHdrRc = LibraryViewTestAccess::GroupTargets(dragView)[0].rc;
+  const auto soloRowRc = LibraryViewTestAccess::GroupTargets(dragView)[1].rc;
+  const float sx = soloRowRc.left + 120.0f, sy = (soloRowRc.top + soloRowRc.bottom) * 0.5f;
+  const float gx = grpHdrRc.left + 120.0f, gy = (grpHdrRc.top + grpHdrRc.bottom) * 0.5f;
+  dragFrame(Input{sx, sy, true, true, false});
+  dragFrame(Input{sx, sy - 20.0f, true, false, false});
+  dragFrame(Input{gx, gy, true, false, false});
+  dragFrame(Input{gx, gy, false, false, true});
+  dragFrame(Input{});
+  assert(LibraryViewTestAccess::Items(dragView).size()==1 && LibraryViewTestAccess::Items(dragView)[0].childCount==3);
+
+  // Drag entire 3-source group onto "OkumaGrubu" sub-list pill -> adds all 3 grouped mangas at once
+  D2D1_RECT_F okumaPillRc{};
+  for (const auto& t : LibraryViewTestAccess::SubListTargets(dragView)) {
+   if (t.listName == "OkumaGrubu") okumaPillRc = t.rc;
+  }
+  assert(okumaPillRc.right > okumaPillRc.left);
+  const float px = (okumaPillRc.left + okumaPillRc.right) * 0.5f, py = (okumaPillRc.top + okumaPillRc.bottom) * 0.5f;
+  const auto mergedHdrRc = LibraryViewTestAccess::GroupTargets(dragView)[0].rc;
+  const float mgx = mergedHdrRc.left + 120.0f, mgy = (mergedHdrRc.top + mergedHdrRc.bottom) * 0.5f;
+  dragFrame(Input{mgx, mgy, true, true, false});
+  dragFrame(Input{mgx, mgy - 20.0f, true, false, false});
+  dragFrame(Input{px, py, true, false, false});
+  dragFrame(Input{px, py, false, false, true});
+  assert(dragLib.CountSeriesInSubList("OkumaGrubu")==3);
+  DeleteFileW(dragPath.c_str()); DeleteFileW((dragPath + L".bak").c_str());
+ }
+
  mirrors.Shutdown();
  renderer.Shutdown(); DestroyWindow(window);CoUninitialize();
  std::cout<<"Reader short/localized chapter titles in 15 languages and concurrent search/chapter/page operations: PASS\n";

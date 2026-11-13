@@ -74,10 +74,34 @@ void Scheduler::TriggerCheckNow() {
     }
     {
         std::lock_guard<std::mutex> lock(m_cvMutex);
+        m_pendingTargetKeys.clear();
         m_triggerNow = true;
     }
     m_cv.notify_all();
     log::Write(L"[Scheduler] Manual update check triggered");
+}
+
+void Scheduler::TriggerCheckKeys(const std::vector<std::string>& keys) {
+    if (!m_running || keys.empty()) return;
+    if (m_isChecking.load()) {
+        log::Write(L"[Scheduler] Update check already in progress, ignoring targeted trigger");
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_cvMutex);
+        m_pendingTargetKeys = keys;
+        m_triggerNow = true;
+    }
+    m_cv.notify_all();
+    log::Write(L"[Scheduler] Targeted update check triggered (%zu series)", keys.size());
+}
+
+bool Scheduler::IsCheckingKey(const std::string& key) const {
+    if (!m_isChecking.load() || key.empty()) return false;
+    std::lock_guard<std::mutex> lock(m_cvMutex);
+    if (m_activeCheckKey == key) return true;
+    if (m_activeTargetKeys.empty()) return true;
+    return std::find(m_activeTargetKeys.begin(), m_activeTargetKeys.end(), key) != m_activeTargetKeys.end();
 }
 
 bool Scheduler::CheckSeries(const std::string& mirror, const std::string& url,
@@ -92,7 +116,37 @@ bool Scheduler::CheckSeries(const std::string& mirror, const std::string& url,
     for (const auto& ch : raw) outNotif.chapters.push_back({ch.title, ch.url});
     NormalizeChapters(outNotif.chapters);
     if (outNotif.chapters.empty()) {
-        outNotif.error = "Bolumler alinamadi; Kaynak Durumu sayfasini kontrol edin";
+        const auto statuses = MirrorEngine::Instance().GetSourceStatuses();
+        const SourceStatus* latestSt = nullptr;
+        for (const auto& st : statuses) {
+            if (st.mirror == mirror && st.operation != "Erişim") {
+                if (!latestSt || st.checkedAt > latestSt->checkedAt) latestSt = &st;
+            }
+        }
+        if (latestSt) {
+            std::string lowerErr = latestSt->error;
+            std::transform(lowerErr.begin(), lowerErr.end(), lowerErr.begin(),
+                           [](unsigned char c) { return (char)::tolower(c); });
+            const bool isProtection = (latestSt->httpStatus == 403 || latestSt->httpStatus == 503 || latestSt->httpStatus == 429 ||
+                                       lowerErr.find("cloudflare") != std::string::npos ||
+                                       lowerErr.find("turnstile") != std::string::npos ||
+                                       lowerErr.find("captcha") != std::string::npos ||
+                                       lowerErr.find("challenge") != std::string::npos ||
+                                       lowerErr.find("koruma") != std::string::npos ||
+                                       lowerErr.find("403") != std::string::npos ||
+                                       lowerErr.find("503") != std::string::npos);
+            if (isProtection) {
+                outNotif.error = latestSt->httpStatus > 0
+                    ? ("Dogrulama / Cloudflare korumasi (HTTP " + std::to_string(latestSt->httpStatus) + ") — Elle Dogrula ile cozun")
+                    : "Dogrulama / Cloudflare korumasi algilandi — Elle Dogrula ile cozun";
+                return false;
+            }
+            if (!latestSt->error.empty()) {
+                outNotif.error = "Bolumler alinamadi: " + latestSt->error;
+                return false;
+            }
+        }
+        outNotif.error = "Bolumler alinamadi; Elle Dogrula ile sayfayi kontrol edebilirsiniz";
         return false;
     }
     const auto& latest = outNotif.chapters.front();
@@ -105,32 +159,65 @@ bool Scheduler::CheckSeries(const std::string& mirror, const std::string& url,
     return true; // Successful scans publish the catalogue even without a release.
 }
 
-void Scheduler::CheckForUpdates() {
+bool Scheduler::CheckForUpdates() {
     m_isChecking = true;
+    std::vector<std::string> targetKeys;
+    {
+        std::lock_guard<std::mutex> lock(m_cvMutex);
+        targetKeys.swap(m_pendingTargetKeys);
+        m_activeTargetKeys = targetKeys;
+        m_activeCheckKey.clear();
+    }
+    const bool wasFullScan = targetKeys.empty();
+    m_checkedCount = 0;
+    m_totalCheckCount = 0;
+
     std::wstring libPath = paths::Join(paths::DataDir(), L"library.json");
 
     amr::ImportData data;
     amr::ImportError err = amr::LoadExportFile(libPath, data);
     if (err != amr::ImportError::None && err != amr::ImportError::Empty) {
         log::Write(L"[Scheduler] Failed to load library file %s (err %d)", libPath.c_str(), (int)err);
+        {
+            std::lock_guard<std::mutex> lock(m_cvMutex);
+            m_activeTargetKeys.clear();
+            m_activeCheckKey.clear();
+        }
         m_isChecking = false;
         if (m_onCheckFinished) m_onCheckFinished();
-        return;
+        return wasFullScan;
     }
 
-    log::Write(L"[Scheduler] Checking updates for followed series in library (%zu total series)", data.series.size());
-
+    std::vector<const Series*> toCheck;
+    toCheck.reserve(data.series.size());
     for (const auto& s : data.series) {
+        if (s.mirror.empty() || s.url.empty()) continue;
+        if (!wasFullScan) {
+            if (std::find(targetKeys.begin(), targetKeys.end(), s.key) != targetKeys.end()) {
+                toCheck.push_back(&s);
+            }
+        } else if (s.update == 1) {
+            toCheck.push_back(&s);
+        }
+    }
+
+    m_totalCheckCount = (int)toCheck.size();
+    log::Write(L"[Scheduler] Checking updates (%zu target series, fullScan=%d)", toCheck.size(), wasFullScan ? 1 : 0);
+
+    for (const Series* sp : toCheck) {
         if (m_stopRequested) break;
+        const Series& s = *sp;
 
         // If user is actively downloading/reading a chapter, pause background checks
         while (ChapterLoader::Instance().IsDownloading() && !m_stopRequested) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
+        if (m_stopRequested) break;
 
-        // Check all series that have update enabled
-        if (s.update != 1) continue;
-        if (s.mirror.empty() || s.url.empty()) continue;
+        {
+            std::lock_guard<std::mutex> lock(m_cvMutex);
+            m_activeCheckKey = s.key;
+        }
 
         UpdateNotification notif;
         notif.seriesKey = s.key;
@@ -153,6 +240,7 @@ void Scheduler::CheckForUpdates() {
         } catch (...) {
             notif.error = "Kaynak denetimi basarisiz";
         }
+        m_checkedCount.fetch_add(1);
         if (m_onNewChapters && !m_stopRequested) m_onNewChapters(notif);
 
         // Hizli ve nazik gecikme (150ms), kullanicinin durdurma istegini dinler
@@ -161,11 +249,17 @@ void Scheduler::CheckForUpdates() {
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_cvMutex);
+        m_activeTargetKeys.clear();
+        m_activeCheckKey.clear();
+    }
     m_isChecking = false;
     log::Write(L"[Scheduler] Update check finished");
     if (m_onCheckFinished) {
         m_onCheckFinished();
     }
+    return wasFullScan;
 }
 
 void Scheduler::WorkerLoop() {
@@ -189,8 +283,8 @@ void Scheduler::WorkerLoop() {
         if (m_scheduleChanged.exchange(false) && !m_triggerNow) continue;
         first = false;
         m_triggerNow = false;
-        CheckForUpdates();
-        if (!m_stopRequested) {
+        const bool wasFullScan = CheckForUpdates();
+        if (wasFullScan && !m_stopRequested) {
             m_lastScan = std::chrono::duration_cast<std::chrono::seconds>(Clock::now().time_since_epoch()).count();
             fileio::WriteAtomic(paths::Join(paths::DataDir(),L"scan.timestamp"),std::to_string(m_lastScan));
         }

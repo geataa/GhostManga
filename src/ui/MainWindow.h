@@ -98,6 +98,11 @@ public:
     void SaveMangaReadingSettings(const std::string& seriesKey, bool webtoon, FitMode fit, bool doublePage, bool rtl, float zoom) override;
     void LanguageChanged() override;
     void CrawlChaptersForManga(const std::string& mangaUrl, std::function<void(const std::vector<std::pair<std::string, std::string>>&)> callback) override;
+    bool IsCheckingUpdates() const override;
+    int UpdateCheckCompleted() const override;
+    int UpdateCheckTotal() const override;
+    void CheckSpecificSeries(const std::vector<std::string>& keys) override;
+    void VerifySourceInteractive(const std::string& seriesKey, const std::string& mirror, const std::string& url, const std::wstring& title) override;
 
     // BrowserHost
     void CloseBrowser() override;
@@ -105,6 +110,7 @@ public:
     void RunOnUIThread(std::function<void()> fn) override;
     void ShowChallengeVerification(const std::string& url, const std::wstring& mangaTitle, const std::string& mode) override;
     void OnChallengeSolved() override;
+    void OnManualVerificationCompleted(const std::string& seriesKey) override;
     void OnCrawlerPageReady(int tabIndex, int pageIndex, int totalPages, const std::wstring& pagePath) override;
     void OnCrawlerChapterReady(int tabIndex, const std::wstring& cacheDir, const std::wstring& mangaTitle, const std::wstring& chapterTitle) override;
 
@@ -249,7 +255,10 @@ private:
     std::string m_challengeUrl;
     std::wstring m_challengeMangaTitle;
     std::string m_challengeMode;
+    std::string m_pendingVerifySeriesKey;
     D2D1_RECT_F m_challengeCardRc{};
+
+    void EnsureSchedulerStarted();
 };
 
 } // namespace gm

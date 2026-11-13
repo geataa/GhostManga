@@ -487,6 +487,52 @@ bool Library::StoreUpdateError(const std::string& key, const std::string& error)
     return CommitSeries(idx,std::move(previous));
 }
 
+bool Library::ClearUpdateError(const std::string& key) {
+    const auto idx = FindSeriesIndex(m_series, key);
+    if (idx == std::string::npos) return false;
+    if (m_series[idx].lastUpdateError.empty()) return true;
+    Series previous = m_series[idx];
+    m_series[idx].lastUpdateError.clear();
+    return CommitSeries(idx, std::move(previous));
+}
+
+bool Library::SetGroupOverride(const std::vector<std::string>& keys, const std::string& groupTitle) {
+    if (keys.empty()) return false;
+    std::string cleanGroup;
+    cleanGroup.reserve(std::min<size_t>(groupTitle.size(), 300));
+    bool pendSpace = false;
+    for (unsigned char c : groupTitle) {
+        if (c <= 0x20 || c == 0x7F) {
+            if (!cleanGroup.empty()) pendSpace = true;
+            continue;
+        }
+        if (cleanGroup.size() >= 300) break;
+        if (pendSpace) {
+            cleanGroup.push_back(' ');
+            pendSpace = false;
+        }
+        cleanGroup.push_back((char)c);
+    }
+
+    auto prevSeries = m_series;
+    bool changed = false;
+    for (const auto& key : keys) {
+        const size_t idx = FindSeriesIndex(m_series, key);
+        if (idx == std::string::npos) continue;
+        if (m_series[idx].groupOverride != cleanGroup) {
+            m_series[idx].groupOverride = cleanGroup;
+            changed = true;
+        }
+    }
+    if (!changed) return false;
+    if (!Save()) {
+        m_series = std::move(prevSeries);
+        return false;
+    }
+    ++m_rev;
+    return true;
+}
+
 bool Library::StoreChapters(const std::string& key, std::vector<Chapter> chapters, int64_t checkedTs) {
     if(std::any_of(chapters.begin(),chapters.end(),[](const Chapter& chapter){return !IsChapterCandidateUrl(chapter.url);})) return false;
     NormalizeChapters(chapters);

@@ -46,11 +46,19 @@ public:
     // Trigger an immediate manual check of all followed manga
     void TriggerCheckNow();
 
+    // Trigger an immediate targeted check for specific series keys (single manga or group)
+    void TriggerCheckKeys(const std::vector<std::string>& keys);
+
     // Is the scheduler currently running
     bool IsRunning() const { return m_running; }
 
     // Is an update scan currently in progress
     bool IsChecking() const { return m_isChecking; }
+
+    // Live scan progress counters
+    int CheckedCount() const { return m_checkedCount.load(); }
+    int TotalCheckCount() const { return m_totalCheckCount.load(); }
+    bool IsCheckingKey(const std::string& key) const;
 
     // Scan a single series and detect if it has updates compared to known lastChapterUrl
     bool CheckSeries(const std::string& mirror, const std::string& url,
@@ -70,12 +78,14 @@ private:
     Scheduler& operator=(const Scheduler&) = delete;
 
     void WorkerLoop();
-    void CheckForUpdates();
+    bool CheckForUpdates();
 
     std::atomic<bool> m_running{ false };
     std::atomic<bool> m_stopRequested{ false };
     std::atomic<bool> m_triggerNow{ false };
     std::atomic<bool> m_isChecking{ false };
+    std::atomic<int> m_checkedCount{ 0 };
+    std::atomic<int> m_totalCheckCount{ 0 };
     std::atomic<int> m_intervalMinutes{60};
     std::atomic<bool> m_scheduleChanged{false};
     int64_t m_lastScan = 0;
@@ -83,8 +93,11 @@ private:
     NotifyCallback m_onNewChapters;
     FinishedCallback m_onCheckFinished;
     std::thread m_worker;
-    std::mutex m_cvMutex;
+    mutable std::mutex m_cvMutex;
     std::condition_variable m_cv;
+    std::vector<std::string> m_pendingTargetKeys;
+    std::vector<std::string> m_activeTargetKeys;
+    std::string m_activeCheckKey;
 };
 
 } // namespace gm::engine

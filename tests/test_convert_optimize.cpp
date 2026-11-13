@@ -179,6 +179,23 @@ int main() {
     assert(!lib.SeriesHasSubList(soloKey, "Top Favoriler"));
     std::cout << "Custom Sub-Lists create, persist, group-assign, rename, export, and non-destructive delete verified!\n";
 
+    // Test Manual Group Merge (SetGroupOverride) & ClearUpdateError persistence
+    assert(lib.SetGroupOverride({ soloKey, jjkKey }, "  Ortak   Grup  "));
+    assert(lib.StoreUpdateError(soloKey, "Cloudflare 403"));
+    {
+        Library reloaded;
+        reloaded.Load(testDb);
+        assert(reloaded.FindSeries(soloKey)->groupOverride == "Ortak Grup");
+        assert(reloaded.FindSeries(jjkKey)->groupOverride == "Ortak Grup");
+        assert(reloaded.FindSeries(soloKey)->lastUpdateError == "Cloudflare 403");
+    }
+    assert(lib.ClearUpdateError(soloKey));
+    assert(lib.FindSeries(soloKey)->lastUpdateError.empty());
+    assert(lib.SetGroupOverride({ jjkKey }, "")); // Ungroup
+    assert(lib.FindSeries(jjkKey)->groupOverride.empty());
+    assert(lib.FindSeries(soloKey)->groupOverride == "Ortak Grup");
+    std::cout << "Manual Group Override merge, ungroup, and ClearUpdateError persistence verified!\n";
+
     // Clean up
     DeleteFileW(testDb.c_str());
     DeleteFileW((testDb + L".bak").c_str());

@@ -98,7 +98,11 @@ public:
     // Serinin guncelleme zamanini ve sitedeki en yeni bolumunu kaydeder (kullanicinin okuma durumuna DOKUNMAZ).
     bool MarkUpdated(const std::string& key, int64_t upts, const std::string& latestChapUrl = "", const std::string& latestChapName = "");
     bool StoreUpdateError(const std::string& key, const std::string& error);
+    bool ClearUpdateError(const std::string& key);
     bool StoreChapters(const std::string& key, std::vector<Chapter> chapters, int64_t checkedTs = 0);
+
+    // Serileri elle bir gruba dahil eder veya gruptan ayirir (groupTitle bos ise sifirlar)
+    bool SetGroupOverride(const std::vector<std::string>& keys, const std::string& groupTitle);
 
     // Manga bazli okuyucu ayarlarini kaydeder (webtoon, fitMode, doublePage, rtl, zoom)
     bool UpdateReadingSettings(const std::string& key, bool webtoon, int fitMode, bool doublePage, bool rtl, double zoom = 0.0);

@@ -578,11 +578,7 @@ void MainWindow::PurgeCache() {
     m_dirty = true;
 }
 
-void MainWindow::CheckUpdatesNow() {
-    if (engine::Scheduler::Instance().IsChecking()) {
-        ToastFor(i18n::Literal(L"Mangalar zaten denetleniyor..."), 2.5f);
-        return;
-    }
+void MainWindow::EnsureSchedulerStarted() {
     if (!engine::Scheduler::Instance().IsRunning()) {
         engine::Scheduler::Instance().Start(
             [this](const engine::UpdateNotification& notif) {
@@ -599,8 +595,88 @@ void MainWindow::CheckUpdatesNow() {
             m_set.bgScanInterval
         );
     }
+}
+
+bool MainWindow::IsCheckingUpdates() const {
+    return engine::Scheduler::Instance().IsChecking();
+}
+
+int MainWindow::UpdateCheckCompleted() const {
+    return engine::Scheduler::Instance().CheckedCount();
+}
+
+int MainWindow::UpdateCheckTotal() const {
+    return engine::Scheduler::Instance().TotalCheckCount();
+}
+
+void MainWindow::CheckUpdatesNow() {
+    if (engine::Scheduler::Instance().IsChecking()) {
+        ToastFor(i18n::Literal(L"⏳ Denetleme zaten devam ediyor, lütfen bitmesini bekleyin."), 2.5f);
+        return;
+    }
+    EnsureSchedulerStarted();
     ToastFor(T(S::ManualScanTriggered), 3.0f);
     engine::Scheduler::Instance().TriggerCheckNow();
+    m_dirty = true;
+}
+
+void MainWindow::CheckSpecificSeries(const std::vector<std::string>& keys) {
+    if (keys.empty()) return;
+    if (engine::Scheduler::Instance().IsChecking()) {
+        ToastFor(i18n::Literal(L"⏳ Denetleme zaten devam ediyor, lütfen bitmesini bekleyin."), 2.5f);
+        return;
+    }
+    EnsureSchedulerStarted();
+    if (keys.size() == 1) {
+        ToastFor(i18n::Literal(L"↻ Seçilen manga denetleniyor..."), 2.8f);
+    } else {
+        wchar_t buf[128];
+        swprintf_s(buf, i18n::Literal(L"↻ Seçilen gruptaki %zu kaynak denetleniyor..."), keys.size());
+        ToastFor(buf, 2.8f);
+    }
+    engine::Scheduler::Instance().TriggerCheckKeys(keys);
+    m_dirty = true;
+}
+
+void MainWindow::VerifySourceInteractive(const std::string& seriesKey, const std::string& mirror, const std::string& url, const std::wstring& title) {
+    std::string targetUrl = url;
+    if (targetUrl.empty() && !seriesKey.empty()) {
+        if (const Series* s = m_lib.FindSeries(seriesKey)) {
+            targetUrl = s->url;
+        }
+    }
+    if (targetUrl.empty()) return;
+    const std::string hint = !title.empty() ? ToUtf8(title) : mirror;
+    OpenEmbeddedBrowser(targetUrl, hint);
+    m_pendingVerifySeriesKey = seriesKey;
+    m_browserView.SetVerificationTarget(seriesKey, title);
+    ToastFor(i18n::Literal(L"🛡️ Doğrulama veya giriş işlemini tamamlayıp üstteki '✅ Doğruladım & Denetle' butonuna basın."), 5.5f);
+    m_dirty = true;
+}
+
+void MainWindow::OnManualVerificationCompleted(const std::string& seriesKey) {
+    RunOnUIThread([this, seriesKey]() {
+        const std::string targetKey = !seriesKey.empty() ? seriesKey : m_pendingVerifySeriesKey;
+        m_pendingVerifySeriesKey.clear();
+        m_browserView.ClearVerificationTarget();
+        if (!targetKey.empty()) {
+            m_lib.ClearUpdateError(targetKey);
+            m_library.ClearUpdateError(targetKey);
+            m_library.CatalogueChanged(targetKey);
+            m_library.SetDisplayDirty();
+        }
+        CloseBrowser();
+        if (!targetKey.empty()) {
+            if (!engine::Scheduler::Instance().IsChecking()) {
+                CheckSpecificSeries({ targetKey });
+            } else if (const Series* s = m_lib.FindSeries(targetKey)) {
+                m_library.FetchChaptersFromHost(*s, *this);
+            }
+        }
+        ToastFor(i18n::Literal(L"✅ Doğrulama kaydedildi, kaynak yeniden denetleniyor..."), 3.5f);
+        m_dirty = true;
+        Invalidate();
+    });
 }
 
 void MainWindow::OpenSitesCatalog() {
@@ -1827,6 +1903,7 @@ void MainWindow::AddSeriesToLibrary(const std::string& mirrorName, const std::st
 
 void MainWindow::OpenEmbeddedBrowser(const std::string& url, const std::string& mirrorHint) {
     if (url.empty()) return;
+    m_browserView.ClearVerificationTarget();
     std::wstring cleanTitle = !mirrorHint.empty() ? FromUtf8(mirrorHint) : i18n::Literal(L"Web Görünümü");
 
     for (size_t i = 1; i < m_tabs.size(); ++i) {
@@ -1850,6 +1927,7 @@ void MainWindow::OpenEmbeddedBrowser(const std::string& url, const std::string& 
 }
 
 void MainWindow::CloseBrowser() {
+    m_browserView.ClearVerificationTarget();
     for (size_t i = 1; i < m_tabs.size(); ++i) {
         if (m_tabs[i].type == TabType::Browser) {
             CloseTab((int)i);
@@ -1999,24 +2077,33 @@ void MainWindow::OnChallengeSolved() {
         m_browserView.Show(false);
         ToastFor(i18n::Literal(L"✅ Robot doğrulaması başarılı! Bölüm hazırlanıyor..."), 3.0f);
 
-        m_browserView.SyncCookiesToJar();
+        m_browserView.SyncCookiesToJar("", [this]() {
+            RunOnUIThread([this]() {
+                bool wasCrawling = m_browserView.IsCrawling();
+                m_browserView.FinishChallengeVerification();
 
-        bool wasCrawling = m_browserView.IsCrawling();
-        m_browserView.FinishChallengeVerification();
+                if (!m_pendingVerifySeriesKey.empty()) {
+                    const std::string vKey = m_pendingVerifySeriesKey;
+                    m_pendingVerifySeriesKey.clear();
+                    OnManualVerificationCompleted(vKey);
+                    return;
+                }
 
-        if (!wasCrawling && m_activeTab > 0 && m_activeTab < (int)m_tabs.size()) {
-            auto& tab = m_tabs[m_activeTab];
-            tab.failed = false;
-            tab.loading = true;
-            tab.statusMessage = i18n::Literal(L"⚡ Doğrulama tamamlandı, bölüm yükleniyor...");
-            std::string mirror = tab.mirror;
-            std::string mangaUrl = tab.mangaUrl;
-            std::wstring title = tab.mangaTitle;
-            std::string chapUrl = tab.chapterUrl;
-            OpenOnlineManga(mirror, mangaUrl, title, chapUrl);
-        }
-        m_dirty = true;
-        Invalidate();
+                if (!wasCrawling && m_activeTab > 0 && m_activeTab < (int)m_tabs.size()) {
+                    auto& tab = m_tabs[m_activeTab];
+                    tab.failed = false;
+                    tab.loading = true;
+                    tab.statusMessage = i18n::Literal(L"⚡ Doğrulama tamamlandı, bölüm yükleniyor...");
+                    std::string mirror = tab.mirror;
+                    std::string mangaUrl = tab.mangaUrl;
+                    std::wstring title = tab.mangaTitle;
+                    std::string chapUrl = tab.chapterUrl;
+                    OpenOnlineManga(mirror, mangaUrl, title, chapUrl);
+                }
+                m_dirty = true;
+                Invalidate();
+            });
+        });
     });
 }
 
@@ -2088,13 +2175,21 @@ void MainWindow::DrawChallengeModal(const D2D1_RECT_F& content, double now) {
     m_r.Text(i18n::Literal(L"Lütfen aşağıdaki sayfada kutuyu işaretleyin. Tamamlanınca otomatik algılanıp kapanır."),
              subRc, theme::TextMuted, 11.5f * s, Renderer::Align::Left);
 
-    // Varsayilan Tarayici, Yenile ve İptal butonları
+    // Doğruladım, Varsayılan Tarayıcı, Yenile ve İptal butonları
     const float btnH = 28.0f * s;
-    const float btnW = 90.0f * s;
-    const float webBtnW = 135.0f * s;
-    const D2D1_RECT_F extWebRc = RcWH(card.right - btnW * 2.0f - webBtnW - 26.0f * s, card.top + (headerH - btnH) * 0.5f, webBtnW, btnH);
-    const D2D1_RECT_F reloadRc = RcWH(card.right - btnW * 2.0f - 18.0f * s, card.top + (headerH - btnH) * 0.5f, btnW, btnH);
+    const float btnW = 86.0f * s;
+    const float doneBtnW = 112.0f * s;
+    const float webBtnW = 126.0f * s;
     const D2D1_RECT_F closeRc = RcWH(card.right - btnW - 10.0f * s, card.top + (headerH - btnH) * 0.5f, btnW, btnH);
+    const D2D1_RECT_F reloadRc = RcWH(closeRc.left - btnW - 6.0f * s, card.top + (headerH - btnH) * 0.5f, btnW, btnH);
+    const D2D1_RECT_F extWebRc = RcWH(reloadRc.left - webBtnW - 6.0f * s, card.top + (headerH - btnH) * 0.5f, webBtnW, btnH);
+    const D2D1_RECT_F doneRc = RcWH(extWebRc.left - doneBtnW - 6.0f * s, card.top + (headerH - btnH) * 0.5f, doneBtnW, btnH);
+
+    if (w::TextButton(m_r, m_ui, Id("cf.done"), doneRc, i18n::Literal(L"✅ Doğruladım"), true)) {
+        OnChallengeSolved();
+        return;
+    }
+    m_ui.Tip(Id("cf.done"), i18n::Literal(L"Doğrulamayı elle onaylayıp devam et"), doneRc);
 
     if (w::TextButton(m_r, m_ui, Id("cf.openext"), extWebRc, i18n::Literal(L"🌐 Tarayıcıda Aç ↗"), false)) {
         if (!m_challengeUrl.empty()) OpenUrl(FromUtf8(m_challengeUrl));

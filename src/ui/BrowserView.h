@@ -29,6 +29,7 @@ public:
     virtual void RunOnUIThread(std::function<void()> fn) = 0;
     virtual void ShowChallengeVerification(const std::string& url, const std::wstring& mangaTitle, const std::string& mode) = 0;
     virtual void OnChallengeSolved() = 0;
+    virtual void OnManualVerificationCompleted(const std::string& seriesKey) { (void)seriesKey; }
     virtual void OnCrawlerPageReady(int tabIndex, int pageIndex, int totalPages, const std::wstring& pagePath) = 0;
     virtual void OnCrawlerChapterReady(int tabIndex, const std::wstring& cacheDir, const std::wstring& mangaTitle, const std::wstring& chapterTitle) = 0;
 };
@@ -52,8 +53,11 @@ public:
     void ReloadCurrentPage();
     void CancelChallengeVerification();
     void FinishChallengeVerification();
-    void SyncCookiesToJar(const std::string& url = "");
+    void SyncCookiesToJar(const std::string& url = "", std::function<void()> onDone = {});
     void StartChallengeVerification(const std::string& url, const std::wstring& mangaTitle = L"");
+    void SetVerificationTarget(const std::string& seriesKey, const std::wstring& seriesTitle = L"");
+    void ClearVerificationTarget() { m_verifySeriesKey.clear(); m_verifySeriesTitle.clear(); }
+    const std::string& VerificationSeriesKey() const { return m_verifySeriesKey; }
     bool IsChallengeVerificationActive() const;
     bool IsCrawling() const;
     void ApplyLastBounds();
@@ -103,6 +107,8 @@ private:
     std::wstring m_mangaTitle;
     w::TextInput m_urlInput;
     bool m_isExtracting = false;
+    std::string m_verifySeriesKey;
+    std::wstring m_verifySeriesTitle;
     float m_lastScale = 1.0f;
     D2D1_RECT_F m_lastBounds{};
 };

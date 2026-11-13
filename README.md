@@ -55,18 +55,25 @@ All user data, custom sub-lists, reading progress, caches, and logs are stored c
 - **Smart Navigation**: Automatically hides the *"Next Chapter"* button when you are reading the latest available chapter; chapter selector dropdown automatically opens scrolled to your current reading position.
 - **Interactive Scrollbar & HUD**: Draggable right-hand position bar, zoom controls (`+` / `-` / `0`), background brightness dimmer (`[` / `]`), one-click **Open in Browser ↗**, and toggleable side drawer (`M` / `C`).
 
-### 4. 📚 Rich Library Management, Unlimited Custom Sub-Lists & Safety Controls
-- **Unlimited Custom Sub-Lists (Collections & Grouping)**: Create as many custom sub-lists as you want, assign individual or multi-mirror grouped series to multiple sub-lists simultaneously, rename lists, or delete a sub-list non-destructively without removing mangas from your main library.
-- **1-Click AMR Import & Export (`Ctrl+I` or Drag & Drop)**: Supports AMR V2, legacy AMR V1, and share exports (including full `customLists` preservation). Automatically backs up `library.json` to `library.json.bak` using atomic temp-file replacement (`MoveFileExW`) so data is never lost on crash or power loss.
-- **Cards & List Views with Color-Coded Status**:
-  - 🔵 **Blue tint**: Read up to the latest known chapter.
-  - 🟡 **Yellow tint**: Unread chapters available!
-  - 🔴 **Red tint & warning badge**: Source update error (hover/inspect for detailed diagnostics without overriding healthy grouped sources).
+### 4. 📚 Rich Library Management, Drag & Drop Grouping, Custom Sub-Lists & Targeted Checks
+- **Unlimited Custom Sub-Lists & Whole-Group Assignment**: Create as many custom sub-lists as you want, assign individual series **or entire multi-source groups** in one click, bulk-select from the **`+ Add Manga / Group`** picker modal, rename lists, or delete a sub-list non-destructively without removing mangas from your main library.
+- **Intuitive Drag & Drop Organization**:
+  - **Drag onto Group Headers / Cards**: Drag any manga row or card onto another manga or group header to merge them immediately into a unified multi-source group (with one-click **`✂` Ungroup** support).
+  - **Drag onto Sub-List Pills**: Drag any single manga **or an entire multi-mirror group** directly onto a **`📁 Sub-List`** pill (or onto **`+ Sub-List`** to create & assign in one move).
+- **1-Click AMR Import & Export (`Ctrl+I` or Drag & Drop)**: Supports AMR V2, legacy AMR V1, and share exports (including full `customLists` and manual group overrides). Automatically backs up `library.json` to `library.json.bak` using atomic temp-file replacement (`MoveFileExW`) so data is never lost on crash or power loss.
+- **Last-Read & Group Highest-Chapter Badges**:
+  - Every manga card and row clearly displays your **last-read chapter** alongside the latest available chapter.
+  - Multi-source **Group Deck cards & Group Headers** automatically compute and highlight the **highest chapter number** across all grouped sources so you always know which mirror is furthest ahead.
+  - Color-coded status tints: 🔵 **Blue** (caught up), 🟡 **Yellow** (unread chapters waiting), 🔴 **Red** (source update/challenge error, plus a quick **`⚠️ Errors`** filter pill).
+- **Active Scan Lock & Targeted Update / Chapter Checks**:
+  - **Scan-In-Progress Lock**: Check buttons automatically disable and display live `X/Y` progress while an update scan is running to prevent duplicate overlapping checks.
+  - **Targeted Checking (`↻`)**: Check your entire library, **only a specific multi-source group**, **only a single manga**, or **even a single individual chapter/issue** (`↻` inside the chapter list to verify live page count on demand).
 - **Series Detail Modal & Smart Chapter Auto-Scroll**: Opens automatically scrolled to your **last-read chapter** for started series or **Chapter 1** for unread series. Filter *All / Unread / Read*, search chapter numbers, **Mark Read up to Latest Chapter**, **Reset Reading Progress**, manage **Sub-Lists**, open in your system browser, or manage mirror sources.
 - **Double-Confirmation Library Reset**: Full library reset asks *"Are you sure?"* twice to prevent accidental data loss.
 
-### 5. 🛡️ Two-Carrier Single-Session (2T1O), Lazy-Load Extractor & Smart Ad-Popup Blocker
+### 5. 🛡️ Two-Carrier Single-Session (2T1O), Interactive Verification & Lazy-Load Extractor
 - **Fast Primary Lane + WebView2 Tandem Fallback**: Uses native WinHTTP for speed and automatically falls back to an embedded Evergreen WebView2 session when Cloudflare Turnstile / JS challenges are detected, sharing clearance cookies (`cf_clearance`) back to the native CookieJar.
+- **Interactive Manual Challenge / Verification Handling (`🛡️ Verify`)**: Whenever a source demands interactive human verification (CAPTCHA, Cloudflare Turnstile, HTTP 403/503 gate), GhostManga flags the series cleanly without freezing and offers a one-click **`🛡️ Verify`** action that opens the source in the embedded browser — complete the check and click **`✅ Verified & Re-Check`** to sync cookies and re-scan that manga automatically.
 - **Scroll-Triggered / Lazy-Loaded Page Extraction**: Static script parsers (`ts_reader.run`, `data-src`, `data-lazy-src`) and dynamic WebView2 container scrolling (`Read in GhostManga`) capture every page of lazy-loaded chapters rather than stopping at the first few viewport images.
 - **Smart Popup & Ad Blocker**: Distinguishes real human-verification / bot challenges (*"Are you human?"* / Cloudflare Turnstile) from ad/redirect spam — silently blocking unwanted ad popups that try to flash open and close.
 
@@ -100,31 +107,37 @@ Instant runtime switching (`L` shortcut or **Settings → Appearance**) across *
   - Clicking or opening any tab automatically scrolls it into view.
 - **Quick Tab Closing**: Click **`×`** on a tab or **Middle-Click** anywhere on a tab to close it immediately.
 
-### 3. 📁 Unlimited Custom Sub-Lists & Series Grouping
-Organize large libraries effortlessly by grouping mangas into unlimited custom sub-lists (e.g., *Favorites*, *Action Manhwa*, *Plan to Read*, *Weekend Binges*, *Completed*):
+### 3. 📁 Unlimited Custom Sub-Lists, Drag & Drop Grouping & Bulk Picker
+Organize large libraries effortlessly by grouping mangas and multi-source stacks into unlimited custom sub-lists (e.g., *Favorites*, *Action Manhwa*, *Plan to Read*, *Weekend Binges*, *Completed*):
 - **Creating a Sub-List**:
   - On the **Reading List** view, click **`+ Sub-List`** in the Sub-Lists bar right below the toolbar, type a name, and press `Enter` (or click **Create**).
-  - You can also click **`+ Add category`** under **Categories** in the Left Drawer (`☰`), or create a brand-new sub-list on the fly inside any manga's Sub-Lists modal.
-- **Assigning Series or Multi-Source Groups to Sub-Lists**:
-  - **From List View**: Click the **`📁`** folder button on any series row or multi-mirror group header row to open its **Sub-Lists** checklist.
-  - **From Card / Detail View**: Open any manga card and click **`📁 Sub-Lists`** in the header/source bar.
-  - Check or uncheck as many sub-lists as you like — a single manga (or all mirrors inside a grouped series) can belong to multiple sub-lists at once. You can also type a new list name directly in the modal's quick-create box to create and assign it in one step.
-- **Filtering by Sub-List**:
-  - Click any **`📁 List Name (count)`** pill in the horizontal Sub-Lists bar (use the mouse wheel or `<` / `>` buttons when you have many sub-lists) or select it from the Left Drawer to filter both Card and List views immediately. Click **`All`** (or click the active sub-list again in the drawer) to return to your full library.
-- **Renaming & Non-Destructive Deletion**:
-  - When a custom sub-list is active in the Sub-Lists bar, contextual **`✎ Rename`** and **`🗑️`** buttons appear on the right.
-  - **Renaming** updates the sub-list name across every assigned series automatically.
-  - **Deleting** a sub-list is **100% non-destructive**: it only removes that sub-list tag while keeping every manga and its reading progress untouched in your main Reading List.
+  - You can also drag any manga or group directly onto **`+ Sub-List`** to create a new sub-list and assign that item in one step, or click **`+ Add category`** in the Left Drawer (`☰`).
+- **Four Effortless Ways to Add Mangas & Whole Groups to Sub-Lists**:
+  1. **Drag & Drop onto Sub-List Pills**: Drag any manga row/card **or an entire multi-source Group Header / Deck Card** and drop it onto any **`📁 List Name`** pill in the Sub-Lists bar. All sources inside a group are added together as a complete unit.
+  2. **Bulk Manga & Group Picker (`➕ Add Manga / Group`)**: Select any sub-list pill and click **`➕ Add Manga / Group`** on the Sub-Lists bar (or in the empty-list prompt) to search your general library and toggle single mangas or whole multi-source groups (`🗂 N Sources`) with one click — or use **`Add All`** for filtered results.
+  3. **Direct `📁` Folder Button on Cards & Group Headers**: Click the **`📁`** icon directly on any Group Deck card, single manga card, List View group header, or series row to check/uncheck multiple sub-lists at once.
+  4. **Detail Modal Sub-Lists View**: Open any manga or group detail card and click **`📁 Sub-Lists`** to manage memberships or quick-create a new list inline.
+- **Drag & Drop Manual Series Grouping (Merge & Ungroup)**:
+  - Have two sources with different titles (e.g., English and localized names for the same series)? Simply **drag one manga row or card and drop it onto the target Group Header (or target manga card)** to merge them into a single multi-source group!
+  - Manually grouped entries persist across restarts in `library.json` and show a quick **`✂` Ungroup** button whenever you want to separate a source back out.
+- **Filtering by Sub-List & Renaming / Non-Destructive Deletion**:
+  - Click any **`📁 List Name (count)`** pill in the horizontal Sub-Lists bar (scroll with the mouse wheel or `<` / `>`) to filter both Card and List views immediately. Click **`All`** to return to your full library.
+  - Contextual **`✎ Rename`** and **`🗑️`** buttons appear on the right when a sub-list is active. Deleting a sub-list is **100% non-destructive** — every manga and its reading history remain safe in your main Reading List.
 
-### 4. 📚 Smart Chapter List Auto-Scroll & Library Views
-- **Card Grid & Compact List Modes**: Toggle between cover-art **Card View** and dense **List View** from the toolbar:
-  - 🟡 **Yellow border / badge**: Unread new chapters are waiting.
-  - 🔵 **Blue border / badge**: Caught up to the latest available chapter.
-  - 🔴 **Red border / warning**: The mirror returned an update error during background check.
-- **Smart Chapter Auto-Scroll**:
-  - **Series in progress**: Opening a manga's detail modal or chapter dropdown automatically scrolls directly to your **last-read chapter** so you can pick up right where you left off.
-  - **Brand-new / unread series**: If you have not read any chapter yet, GhostManga automatically scrolls the chapter list to **Chapter 1** (the earliest chapter) instead of leaving you at Chapter 200+, saving you from endless downward scrolling.
-- **Chapter Filtering & Batch Actions**: Filter chapters by *All / Unread / Read*, search by chapter number/title, **Mark Read up to Latest Chapter**, or **Reset Reading Progress** in a single click.
+### 4. 📚 Card Progress Badges, Smart Auto-Scroll & Targeted Update Checks
+- **Card Grid & Compact List Modes with Chapter Progress**:
+  - **Every Manga Card** displays both its latest known chapter and your **last-read chapter** (`📖 Read: Ch. X` or `Unread`).
+  - **Multi-Source Groups (Deck Cards & Group Headers)** automatically calculate and display the **highest chapter number** (`🔥 Highest: Ch. Y`) across all grouped mirrors alongside your highest read chapter.
+  - Status borders & badges: 🟡 **Yellow** (unread chapters waiting), 🔵 **Blue** (caught up), 🔴 **Red** (source check error).
+- **Active Scan Lock & Targeted Checks (`↻`)**:
+  - While an update check is running, global and per-item check buttons lock automatically (`⏳ X/Y`) so overlapping scans cannot be triggered accidentally.
+  - Need to check just one item? Click **`↻`** on a **Group Header / Group Card** to scan only that group's mirrors, **`↻`** on a **Single Manga** to check only that series, or **`↻`** next to **any specific Chapter row** inside the chapter list to verify that chapter's live page count on the spot.
+- **Interactive Error & Anti-Bot Resolution (`🛡️ Verify`)**:
+  - If any source encounters a CAPTCHA, Cloudflare challenge, or HTTP block during checking, a **`⚠️ Errors (N)`** filter pill appears in the Sub-Lists bar and affected items display a **`🛡️ Verify`** button.
+  - Clicking **`🛡️ Verify`** opens that manga or chapter directly inside GhostManga's embedded WebView2 browser. Solve the verification prompt manually and click **`✅ Verified & Re-Check`** in the top bar — GhostManga flushes the fresh clearance cookies into its native `CookieJar` and re-checks the series automatically.
+- **Smart Chapter Auto-Scroll & Batch Actions**:
+  - **Series in progress** open scrolled directly to your **last-read chapter**; **unread series** open scrolled to **Chapter 1** so you never have to scroll down past hundreds of chapters.
+  - Filter chapters by *All / Unread / Read*, search by chapter number/title, **Mark Read up to Latest Chapter**, or **Reset Reading Progress** in a single click.
 
 ### 5. 🌐 Opening Series & Chapters in Your Default System Browser (`Open in Browser ↗`)
 Whenever you want to view a manga page, read comments, or inspect a chapter in your system's default web browser (Chrome, Edge, Firefox, Brave, etc.):

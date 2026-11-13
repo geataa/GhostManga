@@ -31,6 +31,10 @@ public:
         if (!series.chapters.empty()) { host.StoreChapterCatalogue(series.key, series.chapters); return; }
         FetchChaptersForManga(series.key, series.mirror, series.url, series.lastChapterUrl, host);
     }
+    void FetchChaptersFromHost(const Series& series, ShellHost& host) {
+        CatalogueChanged(series.key);
+        FetchChaptersForManga(series.key, series.mirror, series.url, series.lastChapterUrl, host);
+    }
     void CatalogueChanged(const std::string& key) {
         std::lock_guard<std::mutex> lock(m_chapterMutex);
         m_chapterCache.erase(key);
@@ -47,6 +51,7 @@ public:
     bool HasFocusedTextInput() const {
         if (m_resetConfirmStep > 0 || m_subListModalMode == 3 || (m_tab == kLocal && !m_localSelected.empty())) return false;
         if (m_subListModalMode == 1 || m_subListModalMode == 2) return m_subListInput.focused;
+        if (m_subListModalMode == 4) return m_bulkSubListSearch.focused;
         if (m_chDropdownOpen) return m_chDropdownSearch.focused;
         if (m_selectedRowIndex >= 0) {
             if (m_cardMode == 1) return m_chapterSearch.focused;
@@ -141,9 +146,12 @@ private:
         int64_t upts = 0;
         int64_t lastReadTs = 0;
         int64_t addedTs = 0;
+        double lastReadNum = -1.0;
+        double latestChapNum = -1.0;
         bool stopped = false;
         bool caughtUp = false;
         bool updateFailed = false;
+        std::string groupOverride;
         std::vector<std::string> cats;
     };
 
@@ -154,6 +162,10 @@ private:
         std::wstring groupTitle;
         std::wstring groupInitial;
         std::wstring relTime;    // onceden hesaplanmis grup zamani
+        std::wstring bestLatestLabel; // gruptaki en buyuk sayi etiketi
+        std::wstring bestReadLabel;   // gruptaki en yuksek okunan bolum etiketi
+        double maxChapNum = -1.0;
+        double maxReadNum = -1.0;
         size_t childCount = 0;
         int64_t maxTime = 0;
         bool expanded = false;
@@ -161,6 +173,7 @@ private:
         bool updateFailed = false;
         std::string groupKey;
         std::vector<std::string> groupMirrors; // grup icindeki ayna listesi
+        std::vector<std::string> groupSeriesKeys; // gruptaki tum seri anahtarlari
     };
 
     void DrawEmpty(Renderer& r, Ui& ui, const D2D1_RECT_F& area, ShellHost& host);
@@ -305,17 +318,55 @@ private:
     // Sinirsiz Kullanici Alt Listeleri (Sub-Lists) Filtre ve Yonetim Durumu
     std::string m_activeSubList;
     std::string m_lastActiveSubList;
+    bool m_onlyErrorSeries = false;
+    bool m_lastOnlyErrorSeries = false;
     float m_subListBarScroll = 0.0f;
     float m_subListBarMaxScroll = 0.0f;
     bool m_hoverSubListBar = false;
-    int m_subListModalMode = 0; // 0: Kapali, 1: Olustur, 2: Adlandir, 3: Silme Onayi
+    int m_subListModalMode = 0; // 0: Kapali, 1: Olustur, 2: Adlandir, 3: Silme Onayi, 4: Toplu Manga/Grup Ekle
     bool m_subListSubmitPending = false;
+    std::vector<std::string> m_pendingSubListAssignKeys;
     w::TextInput m_subListInput;
+    w::TextInput m_bulkSubListSearch;
+    float m_bulkSubListScroll = 0.0f;
+    float m_bulkSubListMaxScroll = 0.0f;
     w::TextInput m_cardSubListInput;
     bool m_cardSubListSubmitPending = false;
     float m_cardSubListsScroll = 0.0f;
     float m_cardSubListsMaxScroll = 0.0f;
     int m_cardSubListPrevMode = 0;
+
+    // Surukle & Birak (Drag & Drop -> Alt Liste veya Grup Basligi)
+    struct SubListDropTarget {
+        std::string listName;
+        D2D1_RECT_F rc{};
+        bool isCreateNew = false;
+    };
+    struct GroupDropTarget {
+        std::wstring normTitle;
+        std::wstring groupTitle;
+        std::vector<std::string> keys;
+        D2D1_RECT_F rc{};
+    };
+    bool m_dragCandidate = false;
+    bool m_dragActive = false;
+    bool m_dragIsGroup = false;
+    float m_dragStartX = 0.0f;
+    float m_dragStartY = 0.0f;
+    std::wstring m_dragTitle;
+    std::wstring m_dragSourceNorm;
+    std::vector<std::string> m_dragKeys;
+    std::vector<SubListDropTarget> m_subListDropTargets;
+    std::vector<GroupDropTarget> m_groupDropTargets;
+    void HandleDragAndDrop(Renderer& r, Ui& ui, const D2D1_RECT_F& listRc, Settings& set, Library& lib, ShellHost& host);
+
+    // Tekil Bolum (Sayi) Ozel Denetleme Durumu
+    std::atomic<bool> m_chapterChecking{false};
+    mutable std::mutex m_chapterCheckMutex;
+    std::string m_checkedChapterUrl;
+    int m_checkedChapterPages = -1;
+    std::wstring m_checkedChapterError;
+    void CheckSingleChapter(const std::string& seriesKey, const std::string& mirror, const std::string& chapterUrl, ShellHost& host);
 
     // Guncelleme Hatasi Alan Seriler (Key -> Hata Mesaji)
     mutable std::mutex m_updateErrMutex;

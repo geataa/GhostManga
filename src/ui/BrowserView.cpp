@@ -1703,11 +1703,17 @@ public:
         }
     }
 
-    void SyncCookiesToJar(const std::string& targetUrl = "") {
+    void SyncCookiesToJar(const std::string& targetUrl = "", std::function<void()> onDone = {}) {
         ComPtr<ICoreWebView2_2> wv2;
-        if (!m_webview || FAILED(m_webview.As(&wv2)) || !wv2) return;
+        if (!m_webview || FAILED(m_webview.As(&wv2)) || !wv2) {
+            if (onDone) onDone();
+            return;
+        }
         ComPtr<ICoreWebView2CookieManager> cookieMgr;
-        if (FAILED(wv2->get_CookieManager(&cookieMgr)) || !cookieMgr) return;
+        if (FAILED(wv2->get_CookieManager(&cookieMgr)) || !cookieMgr) {
+            if (onDone) onDone();
+            return;
+        }
 
         std::wstring pageUrlW;
         if (!targetUrl.empty()) {
@@ -1719,11 +1725,14 @@ public:
                 CoTaskMemFree(curSource);
             }
         }
-        if (pageUrlW.empty()) return;
+        if (pageUrlW.empty()) {
+            if (onDone) onDone();
+            return;
+        }
 
-        cookieMgr->GetCookies(pageUrlW.c_str(),
+        HRESULT hrGet = cookieMgr->GetCookies(pageUrlW.c_str(),
             Callback<ICoreWebView2GetCookiesCompletedHandler>(
-                [](HRESULT hr, ICoreWebView2CookieList* list) -> HRESULT {
+                [onDone = std::move(onDone)](HRESULT hr, ICoreWebView2CookieList* list) mutable -> HRESULT {
                     if (SUCCEEDED(hr) && list) {
                         UINT count = 0;
                         list->get_Count(&count);
@@ -1750,10 +1759,12 @@ public:
                             }
                         }
                     }
+                    if (onDone) onDone();
                     return S_OK;
                 }
             ).Get()
         );
+        if (FAILED(hrGet) && onDone) onDone();
     }
 
     void Shutdown() {
@@ -1958,6 +1969,22 @@ void BrowserView::DrawBar(Renderer& r, Ui& ui, const D2D1_RECT_F& bar, double no
         ExtractAndRead();
     }
 
+    float rightAnchorLeft = amrRc.left;
+    if (!m_verifySeriesKey.empty()) {
+        const float verifyBtnW = 192.0f * s;
+        const D2D1_RECT_F verifyRc = RcWH(amrRc.left - verifyBtnW - 6.0f * s, y, verifyBtnW, btnH);
+        if (w::TextButton(r, ui, Id("wv.verifydone"), verifyRc, i18n::Literal(L"✅ Doğruladım & Denetle"), true)) {
+            const std::string vKey = m_verifySeriesKey;
+            m_verifySeriesKey.clear();
+            m_verifySeriesTitle.clear();
+            SyncCookiesToJar("", [this, vKey]() {
+                if (m_host) m_host->OnManualVerificationCompleted(vKey);
+            });
+        }
+        ui.Tip(Id("wv.verifydone"), i18n::Literal(L"Çerezleri ve oturumu kaydedip bu mangayı hemen yeniden denetle"), verifyRc);
+        rightAnchorLeft = verifyRc.left;
+    }
+
     // Ortada bolum gecis butonlari ve temiz Manga Basligi (ASLA raw URL gosterilmez!)
     const float navBtnW = 125.0f * s;
     const D2D1_RECT_F prevRc = RcWH(x, y, navBtnW, btnH);
@@ -1966,7 +1993,7 @@ void BrowserView::DrawBar(Renderer& r, Ui& ui, const D2D1_RECT_F& bar, double no
     }
     x += navBtnW + 8.0f * s;
 
-    const float nextX = amrRc.left - navBtnW - 12.0f * s;
+    const float nextX = rightAnchorLeft - navBtnW - 12.0f * s;
     const D2D1_RECT_F nextRc = RcWH(nextX, y, navBtnW, btnH);
     if (w::TextButton(r, ui, Id("wv.nextchap"), nextRc, i18n::Literal(L"Sonraki Bölüm ▶"), false)) {
         NavigateChapterInBrowser(+1);
@@ -2406,10 +2433,17 @@ void BrowserView::FinishChallengeVerification() {
     }
 }
 
-void BrowserView::SyncCookiesToJar(const std::string& url) {
+void BrowserView::SyncCookiesToJar(const std::string& url, std::function<void()> onDone) {
     if (m_impl) {
-        m_impl->SyncCookiesToJar(url);
+        m_impl->SyncCookiesToJar(url, std::move(onDone));
+    } else if (onDone) {
+        onDone();
     }
+}
+
+void BrowserView::SetVerificationTarget(const std::string& seriesKey, const std::wstring& seriesTitle) {
+    m_verifySeriesKey = seriesKey;
+    m_verifySeriesTitle = seriesTitle;
 }
 
 bool BrowserView::IsCrawling() const {
