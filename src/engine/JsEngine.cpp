@@ -4,7 +4,7 @@
 
 namespace gm::engine {
 
-int JsEngine::InterruptCallback(JSRuntime* rt, void* opaque) {
+int JsEngine::InterruptCallback(JSContext* ctx, void* opaque) {
     auto* self = static_cast<JsEngine*>(opaque);
     if (self && self->m_cancelCheck && self->m_cancelCheck()) return 1;
     if (self && self->m_timeoutEnabled) {

@@ -286,6 +286,7 @@ void LibraryView::RebuildRows(const Library& lib) {
         row.lastChapterUrl = s.lastChapterUrl;
         row.caughtUp = IsCaughtUp(s);
         row.updateFailed = !s.lastUpdateError.empty();
+        row.cats = s.cats;
         row.latestChapterUrl = s.latestChapterUrl;
         row.latestChapterName = s.latestChapterName;
         if (!s.latestChapterName.empty()) {
@@ -325,6 +326,13 @@ void LibraryView::RebuildRows(const Library& lib) {
             if (m_rows[i].key == selectedKey) { m_selectedRowIndex = (int)i; break; }
         if (m_selectedRowIndex < 0) m_cardMode = 0;
     }
+    if (!m_activeSubList.empty()) {
+        const auto& cls = lib.CustomLists();
+        if (std::find(cls.begin(), cls.end(), m_activeSubList) == cls.end()) {
+            m_activeSubList.clear();
+            m_displayDirty = true;
+        }
+    }
 }
 
 void LibraryView::RebuildDisplayItems(const Settings& set) {
@@ -332,9 +340,10 @@ void LibraryView::RebuildDisplayItems(const Settings& set) {
     const bool queryChanged = (q != m_lastQuery);
     const bool sortChanged = (set.librarySort != m_lastSort || set.librarySortDesc != m_lastSortDesc);
     const bool groupChanged = (set.libraryGroup != m_lastGroup);
+    const bool subListChanged = (m_activeSubList != m_lastActiveSubList);
     const bool rowsChanged = (m_itemsRowsRev != m_rowsRev);
     const auto errorRevision = m_updateErrorRevision.load();
-    if (!queryChanged && !sortChanged && !groupChanged && !rowsChanged && !m_displayDirty && m_displayErrorRevision == errorRevision) return;
+    if (!queryChanged && !sortChanged && !groupChanged && !subListChanged && !rowsChanged && !m_displayDirty && m_displayErrorRevision == errorRevision) return;
     m_displayErrorRevision = errorRevision;
 
     m_displayDirty = false;
@@ -344,6 +353,7 @@ void LibraryView::RebuildDisplayItems(const Settings& set) {
     m_lastSort = set.librarySort;
     m_lastSortDesc = set.librarySortDesc;
     m_lastGroup = set.libraryGroup;
+    m_lastActiveSubList = m_activeSubList;
     m_items.clear();
 
     // 1. Filtreleme
@@ -351,6 +361,9 @@ void LibraryView::RebuildDisplayItems(const Settings& set) {
     matched.reserve(m_rows.size());
     for (size_t i = 0; i < m_rows.size(); ++i) {
         const Row& row = m_rows[i];
+        if (!m_activeSubList.empty()) {
+            if (std::find(row.cats.begin(), row.cats.end(), m_activeSubList) == row.cats.end()) continue;
+        }
         if (!q.empty() && row.searchStr.find(q) == std::wstring::npos) continue;
 
         if (m_filterNew != 2) {
@@ -555,6 +568,7 @@ float LibraryView::ClampScroll(float listH, float contentH) {
 }
 
 void LibraryView::OnWheel(float notches) {
+    if (m_subListModalMode > 0) return;
     if(m_tab==kLocal && !m_localSelected.empty()){m_localDetailScroll=std::clamp(m_localDetailScroll-notches*86.0f,0.0f,m_localDetailMaxScroll);return;}
     if (m_chDropdownOpen) {
         m_chDropdownScroll = std::clamp(m_chDropdownScroll - notches * 42.0f, 0.0f, m_chDropdownMaxScroll);
@@ -564,13 +578,37 @@ void LibraryView::OnWheel(float notches) {
         m_chapterScroll = std::clamp(m_chapterScroll - notches * 42.0f, 0.0f, m_chapterMaxScroll);
         return;
     }
+    if (m_selectedRowIndex >= 0 && m_cardMode == 2) {
+        m_cardSubListsScroll = std::clamp(m_cardSubListsScroll - notches * 42.0f, 0.0f, m_cardSubListsMaxScroll);
+        return;
+    }
     if(m_selectedRowIndex>=0 && m_cardMode==0){m_cardSourcesScroll=std::clamp(m_cardSourcesScroll-notches*54.0f,0.0f,m_cardSourcesMaxScroll);return;}
+    if (m_tab == kSeries && m_hoverSubListBar && m_subListBarMaxScroll > 0.0f) {
+        m_subListBarScroll = std::clamp(m_subListBarScroll - notches * 90.0f, 0.0f, m_subListBarMaxScroll);
+        return;
+    }
     float& sc = m_scroll[m_tab];
     sc = std::clamp(sc - notches * m_pitch * 2.0f, 0.0f, m_maxScroll[m_tab]);
     if(m_tab==kSearch && m_activeSearch) m_activeSearch->scroll=sc;
 }
 
 bool LibraryView::OnKey(UINT vk, bool ctrl, bool shift) {
+    if (m_subListModalMode > 0) {
+        if (vk == VK_ESCAPE) {
+            m_subListModalMode = 0;
+            m_subListInput.focused = false;
+            m_subListSubmitPending = false;
+            return true;
+        }
+        if ((m_subListModalMode == 1 || m_subListModalMode == 2) && m_subListInput.focused) {
+            if (vk == VK_RETURN) {
+                m_subListSubmitPending = true;
+                return true;
+            }
+            if (m_subListInput.OnKey(vk, ctrl, shift)) return true;
+        }
+        return true;
+    }
     if(m_tab==kLocal && !m_localSelected.empty()){if(vk==VK_ESCAPE){if(!m_localDeletePath.empty())m_localDeletePath.clear();else m_localSelected.clear();}return true;}
     if(m_tab==kLocal && m_localSearch.focused){if(vk==VK_ESCAPE){m_localSearch.focused=false;return true;}if(m_localSearch.OnKey(vk,ctrl,shift))return true;}
     if (m_chDropdownOpen) {
@@ -602,6 +640,17 @@ bool LibraryView::OnKey(UINT vk, bool ctrl, bool shift) {
         }
     }
     if (m_selectedRowIndex >= 0) {
+        if (m_cardMode == 2 && m_cardSubListInput.focused) {
+            if (vk == VK_RETURN) {
+                m_cardSubListSubmitPending = true;
+                return true;
+            }
+            if (vk == VK_ESCAPE) {
+                m_cardSubListInput.focused = false;
+                return true;
+            }
+            if (m_cardSubListInput.OnKey(vk, ctrl, shift)) return true;
+        }
         if (m_cardMode == 1 && m_chapterSearch.focused) {
             if (m_chapterSearch.OnKey(vk, ctrl, shift)) return true;
             if (vk == VK_ESCAPE) {
@@ -610,12 +659,21 @@ bool LibraryView::OnKey(UINT vk, bool ctrl, bool shift) {
             }
         }
         if (vk == VK_ESCAPE) {
-            if (m_cardMode == 1) {
+            if (m_cardMode == 2) {
+                if (m_cardSubListPrevMode >= 0) m_cardMode = m_cardSubListPrevMode;
+                else { m_selectedRowIndex = -1; m_cardMode = 0; }
+            } else if (m_cardMode == 1) {
                 m_cardMode = 0;
             } else {
                 m_selectedRowIndex = -1;
             }
             return true;
+        }
+        if (m_cardMode == 2 && !m_cardSubListInput.focused) {
+            if (vk == VK_UP) { m_cardSubListsScroll = std::clamp(m_cardSubListsScroll - 40.0f, 0.0f, m_cardSubListsMaxScroll); return true; }
+            if (vk == VK_DOWN) { m_cardSubListsScroll = std::clamp(m_cardSubListsScroll + 40.0f, 0.0f, m_cardSubListsMaxScroll); return true; }
+            if (vk == VK_PRIOR) { m_cardSubListsScroll = std::clamp(m_cardSubListsScroll - 180.0f, 0.0f, m_cardSubListsMaxScroll); return true; }
+            if (vk == VK_NEXT) { m_cardSubListsScroll = std::clamp(m_cardSubListsScroll + 180.0f, 0.0f, m_cardSubListsMaxScroll); return true; }
         }
         if (m_cardMode == 1 && !m_chapterSearch.focused) {
             if (vk == VK_UP) {
@@ -681,6 +739,12 @@ bool LibraryView::OnKey(UINT vk, bool ctrl, bool shift) {
 }
 
 bool LibraryView::OnChar(wchar_t c) {
+    if (m_subListModalMode > 0) {
+        if ((m_subListModalMode == 1 || m_subListModalMode == 2) && m_subListInput.focused) {
+            return m_subListInput.OnChar(c);
+        }
+        return true;
+    }
     if(m_tab==kLocal && m_localSearch.focused && m_localSelected.empty())return m_localSearch.OnChar(c);
     if (m_resetConfirmStep > 0) return true;
     if (m_chDropdownOpen && m_chDropdownSearch.focused) {
@@ -689,6 +753,9 @@ bool LibraryView::OnChar(wchar_t c) {
             return true;
         }
         return false;
+    }
+    if (m_selectedRowIndex >= 0 && m_cardMode == 2 && m_cardSubListInput.focused) {
+        return m_cardSubListInput.OnChar(c);
     }
     if (m_selectedRowIndex >= 0 && m_cardMode == 1 && m_chapterSearch.focused) {
         return m_chapterSearch.OnChar(c);
@@ -784,6 +851,7 @@ void LibraryView::Draw(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& s
     }
     m_lastScale = s;
 
+    m_hoverSubListBar = false;
     RebuildRows(lib);
     RebuildDisplayItems(set);
     if (m_chDropdownOpen) {
@@ -795,9 +863,9 @@ void LibraryView::Draw(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& s
     const bool hasSeries = !m_rows.empty();
     const bool hasLocal = !recent.empty() || !m_localGroups.empty();
     // Search, sources and diagnostics remain available with an empty library.
-    if (!hasSeries && !hasLocal && m_tab == kSeries) m_tab = kSearch;
+    if (!hasSeries && !hasLocal && lib.CustomLists().empty() && m_subListModalMode == 0 && m_tab == kSeries) m_tab = kSearch;
 
-    const bool modalOpen = (m_selectedRowIndex >= 0 && (size_t)m_selectedRowIndex < m_rows.size());
+    const bool modalOpen = (m_selectedRowIndex >= 0 && (size_t)m_selectedRowIndex < m_rows.size()) || m_subListModalMode > 0;
     if (modalOpen || (m_tab == kLocal && !m_localSelected.empty())) {
         // Alttaki bilesenlerin (toolbar, butonlar, satirlar) tiklanmasini engelle
         ui.Occlude(area);
@@ -868,7 +936,11 @@ void LibraryView::Draw(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& s
     if (m_tab == kSeries) {
         const D2D1_RECT_F tbRc = Rc(left, y, right, y + 36.0f * s);
         DrawToolbar(r, ui, tbRc, set, lib, host, now);
-        y += 44.0f * s;
+        y += 42.0f * s;
+
+        const D2D1_RECT_F slRc = Rc(left, y, right, y + 32.0f * s);
+        DrawSubListBar(r, ui, slRc, set, lib, host);
+        y += 40.0f * s;
     }
 
     if (m_sortMenuOpen && (m_tab == kSeries || m_tab == kSites)) {
@@ -910,6 +982,11 @@ void LibraryView::Draw(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& s
     if (m_resetConfirmStep > 0) {
         ui.ClearOcclusion();
         DrawResetConfirmModal(r, ui, area, lib, set, host);
+    }
+
+    if (m_subListModalMode > 0) {
+        ui.ClearOcclusion();
+        DrawSubListModal(r, ui, area, set, lib, host, now);
     }
 }
 
@@ -1005,6 +1082,261 @@ void LibraryView::DrawToolbar(Renderer& r, Ui& ui, const D2D1_RECT_F& rc, Settin
             host.Invalidate();
         }
         ui.Tip(Id("lib.resetbtn"), i18n::Literal(L"Tüm kütüphaneyi ve okuma geçmişini sıfırla (2 aşamalı güvenlik onayı)"), resetRc);
+    }
+}
+
+void LibraryView::DrawSubListBar(Renderer& r, Ui& ui, const D2D1_RECT_F& rc, Settings& set, Library& lib, ShellHost& host) {
+    const float s = r.Scale();
+    const float h = RcH(rc);
+    const float gap = 6.0f * s;
+
+    // Sag taraf sabit eylem dugmeleri: [+ Alt Liste] ve aktif alt liste varsa [Adlandir] [Sil]
+    float rightEdge = rc.right;
+    const std::wstring newLbl = i18n::Literal(L"+ Alt Liste");
+    const float newW = std::max(96.0f * s, r.MeasureText(newLbl, 12.0f * s, Renderer::Weight::Semibold) + 22.0f * s);
+    const D2D1_RECT_F newRc = Rc(rightEdge - newW, rc.top, rightEdge, rc.bottom);
+    if (w::TextButton(r, ui, Id("lib.sl.new"), newRc, newLbl, false)) {
+        OpenCreateSubListModal();
+        host.Invalidate();
+    }
+    rightEdge = newRc.left - gap;
+
+    if (!m_activeSubList.empty()) {
+        const D2D1_RECT_F delRc = RcWH(rightEdge - h, rc.top, h, h);
+        if (w::IconButton(r, ui, Id("lib.sl.del"), delRc, Icon::Trash, 15.0f * s, i18n::Literal(L"Alt Listeyi Sil"))) {
+            m_subListModalMode = 3;
+            m_subListInput.focused = false;
+            host.Invalidate();
+        }
+        rightEdge = delRc.left - gap;
+
+        const std::wstring renLbl = L"✎ " + std::wstring(i18n::Literal(L"Adlandır"));
+        const float renW = std::max(84.0f * s, r.MeasureText(renLbl, 11.5f * s, Renderer::Weight::Semibold) + 18.0f * s);
+        const D2D1_RECT_F renRc = Rc(rightEdge - renW, rc.top, rightEdge, rc.bottom);
+        if (w::TextButton(r, ui, Id("lib.sl.ren"), renRc, renLbl, false)) {
+            m_subListModalMode = 2;
+            m_subListSubmitPending = false;
+            m_subListInput.SetText(FromUtf8(m_activeSubList));
+            m_subListInput.SelectAll();
+            m_subListInput.focused = true;
+            host.Invalidate();
+        }
+        rightEdge = renRc.left - gap;
+    }
+
+    // Sol sabit hap: [Tümü (N)]
+    wchar_t allBuf[96];
+    swprintf_s(allBuf, L"%s (%zu)", i18n::Literal(L"Tümü"), m_rows.size());
+    const float allW = std::max(74.0f * s, r.MeasureText(allBuf, 12.0f * s, Renderer::Weight::Semibold) + 22.0f * s);
+    const D2D1_RECT_F allRc = Rc(rc.left, rc.top, rc.left + allW, rc.bottom);
+    if (w::TextButton(r, ui, Id("lib.sl.all"), allRc, allBuf, m_activeSubList.empty())) {
+        if (!m_activeSubList.empty()) {
+            m_activeSubList.clear();
+            m_scroll[kSeries] = 0.0f;
+            m_displayDirty = true;
+            RebuildDisplayItems(set);
+            host.Invalidate();
+        }
+    }
+
+    // Orta yatay kaydirilabilir alt liste seridi
+    const auto& customLists = lib.CustomLists();
+    if (customLists.empty()) {
+        m_subListBarScroll = 0.0f;
+        m_subListBarMaxScroll = 0.0f;
+        const D2D1_RECT_F hintRc = Rc(allRc.right + 12.0f * s, rc.top, rightEdge - 8.0f * s, rc.bottom);
+        if (RcW(hintRc) > 80.0f * s) {
+            r.Text(i18n::Literal(L"Bu mangayı dilediğiniz kadar alt listeye ekleyip gruplayabilirsiniz."),
+                   hintRc, theme::TextDim, 11.5f * s, Renderer::Align::Left);
+        }
+        return;
+    }
+
+    struct PillInfo {
+        std::string raw;
+        std::wstring label;
+        float width = 0.0f;
+    };
+    std::vector<PillInfo> pills;
+    pills.reserve(customLists.size());
+    float totalW = 0.0f;
+    for (size_t i = 0; i < customLists.size(); ++i) {
+        const auto& cl = customLists[i];
+        const int cnt = lib.CountSeriesInSubList(cl);
+        std::wstring lbl = L"📁 " + OneLine(FromUtf8(cl), 42) + L" (" + std::to_wstring(cnt) + L")";
+        const float pw = std::max(68.0f * s, r.MeasureText(lbl, 12.0f * s, Renderer::Weight::Semibold) + 22.0f * s);
+        if (i > 0) totalW += gap;
+        totalW += pw;
+        pills.push_back({ cl, std::move(lbl), pw });
+    }
+
+    D2D1_RECT_F stripRc = Rc(allRc.right + gap, rc.top, rightEdge, rc.bottom);
+    if (RcW(stripRc) < 40.0f * s) return;
+
+    m_hoverSubListBar = RcHit(stripRc, ui.In().mx, ui.In().my);
+
+    const bool overflow = totalW > RcW(stripRc) + 1.0f;
+    if (overflow && RcW(stripRc) > 90.0f * s) {
+        const float navW = 26.0f * s;
+        const D2D1_RECT_F leftNav = RcWH(stripRc.left, rc.top, navW, h);
+        const D2D1_RECT_F rightNav = RcWH(stripRc.right - navW, rc.top, navW, h);
+        stripRc = Rc(leftNav.right + 4.0f * s, rc.top, rightNav.left - 4.0f * s, rc.bottom);
+        m_subListBarMaxScroll = std::max(0.0f, totalW - RcW(stripRc));
+        m_subListBarScroll = std::clamp(m_subListBarScroll, 0.0f, m_subListBarMaxScroll);
+
+        if (w::IconButton(r, ui, Id("lib.sl.prev"), leftNav, Icon::ChevronLeft, 14.0f * s, L"‹", false, m_subListBarScroll > 0.5f)) {
+            m_subListBarScroll = std::max(0.0f, m_subListBarScroll - 180.0f * s);
+            host.Invalidate();
+        }
+        if (w::IconButton(r, ui, Id("lib.sl.next"), rightNav, Icon::ChevronRight, 14.0f * s, L"›", false, m_subListBarScroll < m_subListBarMaxScroll - 0.5f)) {
+            m_subListBarScroll = std::min(m_subListBarMaxScroll, m_subListBarScroll + 180.0f * s);
+            host.Invalidate();
+        }
+    } else {
+        m_subListBarScroll = 0.0f;
+        m_subListBarMaxScroll = 0.0f;
+    }
+
+    r.PushClip(stripRc);
+    float px = stripRc.left - m_subListBarScroll;
+    for (size_t i = 0; i < pills.size(); ++i) {
+        const auto& p = pills[i];
+        const D2D1_RECT_F pRc = RcWH(px, rc.top, p.width, h);
+        px += p.width + gap;
+        if (pRc.right < stripRc.left || pRc.left > stripRc.right) continue;
+
+        const D2D1_RECT_F hitRc = Rc(std::max(pRc.left, stripRc.left), pRc.top, std::min(pRc.right, stripRc.right), pRc.bottom);
+        const uint32_t pid = Id("lib.sl.pill", Id(p.raw.c_str()));
+        const bool active = (m_activeSubList == p.raw);
+        const bool clicked = RcW(hitRc) > 4.0f && ui.Button(pid, hitRc);
+
+        r.FillRound(pRc, h * 0.5f, active ? theme::Active : theme::Panel, active ? 0.85f : 1.0f);
+        if (ui.Hot(pid) && !active) r.FillRound(pRc, h * 0.5f, theme::White, 0.08f);
+        r.StrokeRound(pRc, h * 0.5f, active ? theme::ActiveEdge : theme::Border, (active ? 1.5f : 1.0f) * s, active ? 0.9f : 0.6f);
+        r.Text(p.label, pRc, active ? theme::White : theme::Text, 12.0f * s, Renderer::Align::Center, Renderer::Weight::Semibold);
+        ui.Tip(pid, FromUtf8(p.raw), hitRc);
+
+        if (clicked) {
+            m_activeSubList = active ? std::string() : p.raw;
+            m_scroll[kSeries] = 0.0f;
+            m_displayDirty = true;
+            RebuildDisplayItems(set);
+            host.Invalidate();
+        }
+    }
+    r.PopClip();
+}
+
+void LibraryView::DrawSubListModal(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& set, Library& lib, ShellHost& host, double now) {
+    if (m_subListModalMode <= 0) return;
+    const float s = r.Scale();
+    r.Fill(area, theme::Black, 0.65f);
+
+    const float cardW = std::min(460.0f * s, RcW(area) - 32.0f * s);
+    const float cardH = (m_subListModalMode == 3) ? 200.0f * s : 196.0f * s;
+    const D2D1_RECT_F card = RcWH(area.left + (RcW(area) - cardW) * 0.5f, area.top + (RcH(area) - cardH) * 0.5f, cardW, cardH);
+
+    if (ui.In().pressed && !RcHit(card, ui.In().mx, ui.In().my)) {
+        m_subListModalMode = 0;
+        m_subListInput.focused = false;
+        m_subListSubmitPending = false;
+        host.Invalidate();
+        return;
+    }
+
+    r.FillRound(card, 16.0f * s, theme::Elevated, 1.0f);
+    r.StrokeRound(card, 16.0f * s, theme::Border, 1.5f * s, 0.85f);
+
+    const wchar_t* title = (m_subListModalMode == 1)
+        ? i18n::Literal(L"Yeni Alt Liste Oluştur")
+        : (m_subListModalMode == 2 ? i18n::Literal(L"Alt Listeyi Yeniden Adlandır") : i18n::Literal(L"Alt Listeyi Sil"));
+    r.Text(title, Rc(card.left + 22.0f * s, card.top + 18.0f * s, card.right - 52.0f * s, card.top + 46.0f * s),
+           theme::Text, 17.0f * s, Renderer::Align::Left, Renderer::Weight::Bold);
+
+    const D2D1_RECT_F closeRc = RcWH(card.right - 38.0f * s, card.top + 16.0f * s, 26.0f * s, 26.0f * s);
+    if (w::IconButton(r, ui, Id("sl.modal.close"), closeRc, Icon::Close, 15.0f * s, i18n::Literal(L"Kapat"))) {
+        m_subListModalMode = 0;
+        m_subListInput.focused = false;
+        m_subListSubmitPending = false;
+        host.Invalidate();
+        return;
+    }
+
+    const float btnH = 34.0f * s;
+    const float btnW = 116.0f * s;
+    const D2D1_RECT_F confirmRc = RcWH(card.right - 22.0f * s - btnW, card.bottom - 20.0f * s - btnH, btnW, btnH);
+    const D2D1_RECT_F cancelRc = RcWH(confirmRc.left - 10.0f * s - btnW, confirmRc.top, btnW, btnH);
+
+    if (w::TextButton(r, ui, Id("sl.modal.cancel"), cancelRc, i18n::Literal(L"İptal"), false)) {
+        m_subListModalMode = 0;
+        m_subListInput.focused = false;
+        m_subListSubmitPending = false;
+        host.Invalidate();
+        return;
+    }
+
+    if (m_subListModalMode == 3) {
+        std::wstring body = L"\"" + FromUtf8(m_activeSubList) + L"\" — " + i18n::Literal(L"Bu alt liste kaldırılacak. Mangalarınız ana kütüphaneden silinmez, yalnızca bu alt listeden çıkarılır.");
+        r.Text(body, Rc(card.left + 22.0f * s, card.top + 56.0f * s, card.right - 22.0f * s, confirmRc.top - 12.0f * s),
+               theme::TextMuted, 13.0f * s, Renderer::Align::Left, Renderer::Weight::Normal, 1.0f, true);
+        if (w::TextButton(r, ui, Id("sl.modal.delok"), confirmRc, i18n::Literal(L"Sil"), true)) {
+            if (lib.DeleteCustomList(m_activeSubList)) {
+                m_activeSubList.clear();
+                m_rowsRev = 0;
+                m_displayDirty = true;
+                RebuildRows(lib);
+                RebuildDisplayItems(set);
+                host.Toast(i18n::Literal(L"Alt liste kaldırıldı."));
+            }
+            m_subListModalMode = 0;
+            host.Invalidate();
+        }
+        return;
+    }
+
+    const D2D1_RECT_F inputRc = Rc(card.left + 22.0f * s, card.top + 64.0f * s, card.right - 22.0f * s, card.top + 102.0f * s);
+    m_subListInput.Draw(r, ui, Id("sl.modal.input"), inputRc, i18n::Literal(L"Alt liste adı girin (örn. Favoriler, Okunacaklar, Manhwa)..."), false, now);
+
+    const wchar_t* okText = (m_subListModalMode == 1) ? i18n::Literal(L"Oluştur") : i18n::Literal(L"Kaydet");
+    const bool clickedOk = w::TextButton(r, ui, Id("sl.modal.ok"), confirmRc, okText, true);
+    if (clickedOk || m_subListSubmitPending) {
+        m_subListSubmitPending = false;
+        std::string rawUtf8 = ToUtf8(m_subListInput.text);
+        // Trim whitespace
+        const size_t f = rawUtf8.find_first_not_of(" \t\r\n");
+        const std::string trimmed = (f == std::string::npos) ? std::string() : rawUtf8.substr(f, rawUtf8.find_last_not_of(" \t\r\n") - f + 1);
+        if (trimmed.empty()) return;
+
+        if (m_subListModalMode == 1) {
+            if (lib.AddCustomList(trimmed)) {
+                m_activeSubList = lib.CustomLists().back();
+                m_scroll[kSeries] = 0.0f;
+                m_rowsRev = 0;
+                m_displayDirty = true;
+                RebuildRows(lib);
+                RebuildDisplayItems(set);
+                host.Toast(i18n::Literal(L"Alt liste oluşturuldu."));
+                m_subListModalMode = 0;
+                m_subListInput.focused = false;
+            } else {
+                host.Toast(i18n::Literal(L"Bu isimde bir alt liste zaten mevcut."));
+            }
+        } else if (m_subListModalMode == 2) {
+            if (lib.RenameCustomList(m_activeSubList, trimmed)) {
+                m_activeSubList = trimmed;
+                m_rowsRev = 0;
+                m_displayDirty = true;
+                RebuildRows(lib);
+                RebuildDisplayItems(set);
+                host.Toast(i18n::Literal(L"Alt liste yeniden adlandırıldı."));
+                m_subListModalMode = 0;
+                m_subListInput.focused = false;
+            } else {
+                m_subListModalMode = 0;
+                m_subListInput.focused = false;
+            }
+        }
+        host.Invalidate();
     }
 }
 
@@ -1139,9 +1471,22 @@ void LibraryView::DrawSeriesList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, S
                 }
             }
 
+            // Alt Listelere Ekle/Cikar butonu (📁) - grup basligi icin
+            const D2D1_RECT_F slGrpRc = RcWH(rdRc.left - 6.0f * s - 28.0f * s, by, 28.0f * s, btnH);
+            if (w::IconButton(r, ui, Id("lib.grp.sl", Id(item.groupKey.c_str())), slGrpRc, Icon::Folder, 15.0f * s, i18n::Literal(L"Alt listelere ekle veya çıkar"))) {
+                gActionClicked = true;
+                m_selectedRowIndex = (int)item.rowIndex;
+                m_cardMode = 2;
+                m_cardSubListPrevMode = -1;
+                m_cardSubListsScroll = 0.0f;
+                m_cardSubListInput.Clear();
+                m_cardSubListInput.focused = false;
+                host.Invalidate();
+            }
+
             // Baslik ve metin blogu - dikey tam ortalanmis
             const float tx = leftArrowRc.right + 10.0f * s;
-            const float tr = rdRc.left - 12.0f * s;
+            const float tr = slGrpRc.left - 12.0f * s;
             const float textBlockH = 38.0f * s;
             const float textTop = rc.top + (rowH - textBlockH) * 0.5f;
             const float titleW = r.MeasureText(item.groupTitle, 15.0f * s, Renderer::Weight::Semibold);
@@ -1308,7 +1653,21 @@ void LibraryView::DrawSeriesList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, S
             const std::wstring targetUrl = !row.mangaUrl.empty() ? FromUtf8(row.mangaUrl) : row.openUrl;
             if (!targetUrl.empty()) host.OpenUrl(targetUrl);
         }
-        tagsLeft = webRowRc.left - 8.0f * s;
+        tagsLeft = webRowRc.left - 4.0f * s;
+
+        // 3e. Alt Listelere Ekle / Cikar Butonu (📁)
+        const D2D1_RECT_F slRowRc = RcWH(tagsLeft - actBtnW, by, actBtnW, btnH);
+        if (w::IconButton(r, ui, Id("lib.row.sl", rowKeyHash), slRowRc, Icon::Folder, 15.0f * s, i18n::Literal(L"Alt listelere ekle veya çıkar"))) {
+            actionClicked = true;
+            m_selectedRowIndex = (int)item.rowIndex;
+            m_cardMode = 2;
+            m_cardSubListPrevMode = -1;
+            m_cardSubListsScroll = 0.0f;
+            m_cardSubListInput.Clear();
+            m_cardSubListInput.focused = false;
+            host.Invalidate();
+        }
+        tagsLeft = slRowRc.left - 8.0f * s;
 
         // 4. Guncelleme Hatasi Alindiysa Tatli Bir Uyari Rozeti (Kullanici istegi)
         if (row.updateFailed || HasUpdateError(row.key)) {
@@ -2222,7 +2581,17 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
             const std::wstring targetUrl = !row.mangaUrl.empty() ? FromUtf8(row.mangaUrl) : row.openUrl;
             if (!targetUrl.empty()) host.OpenUrl(targetUrl);
         }
-        const float tr = openWebHeaderRc.left - 12.0f * s;
+        const auto subListHeaderRc = RcWH(openWebHeaderRc.left - 34 * s, closeRc.top, 26 * s, 26 * s);
+        if (w::IconButton(r, ui, Id("card.ch.sublists"), subListHeaderRc, Icon::Folder, 16 * s, i18n::Literal(L"Alt Listeler"))) {
+            m_cardSubListPrevMode = 1;
+            m_cardMode = 2;
+            m_cardSubListsScroll = 0.0f;
+            m_cardSubListInput.Clear();
+            m_cardSubListInput.focused = false;
+            host.Invalidate();
+            return;
+        }
+        const float tr = subListHeaderRc.left - 12.0f * s;
         const float titleW = r.MeasureText(row.title, 16.0f * s, Renderer::Weight::Bold);
         const float badgeWidth=row.mirror.empty()?0:r.MeasureText(FromUtf8(row.mirror),11*s,Renderer::Weight::Semibold)+14*s;
         const float badgeSpace=std::min(std::max(0.0f,(tr-tx)*0.4f),badgeWidth+8*s);
@@ -2523,6 +2892,157 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
         return;
     }
 
+    // ---------------------- MOD 2: ALT LISTELER (GRUP & KOLEKSIYON YONETIMI) ----------------------
+    if (m_cardMode == 2) {
+        std::vector<std::string> targetKeys;
+        for (size_t ri = 0; ri < m_rows.size(); ++ri) {
+            if (m_rows[ri].normTitle == row.normTitle) targetKeys.push_back(m_rows[ri].key);
+        }
+        if (targetKeys.empty()) targetKeys.push_back(row.key);
+
+        const float cardW = std::min(620.0f * s, RcW(area) - 40.0f * s);
+        const float cardH = std::min(520.0f * s, RcH(area) - 40.0f * s);
+        const D2D1_RECT_F card = RcWH(area.left + (RcW(area) - cardW) * 0.5f, area.top + (RcH(area) - cardH) * 0.5f, cardW, cardH);
+
+        if (ui.In().pressed && !RcHit(card, ui.In().mx, ui.In().my)) {
+            m_selectedRowIndex = -1;
+            m_cardMode = 0;
+            m_cardSubListInput.focused = false;
+            host.Invalidate();
+            return;
+        }
+
+        r.FillRound(card, 16.0f * s, theme::Elevated, 1.0f);
+        r.StrokeRound(card, 16.0f * s, theme::Border, 1.5f * s, 0.8f);
+
+        const D2D1_RECT_F closeRc = RcWH(card.right - 36.0f * s, card.top + 14.0f * s, 26.0f * s, 26.0f * s);
+        if (w::IconButton(r, ui, Id("card.sl.close"), closeRc, Icon::Close, 16.0f * s, i18n::Literal(L"Kapat"))) {
+            m_selectedRowIndex = -1;
+            m_cardMode = 0;
+            m_cardSubListInput.focused = false;
+            host.Invalidate();
+            return;
+        }
+
+        float titleLeft = card.left + 20.0f * s;
+        if (m_cardSubListPrevMode >= 0) {
+            const D2D1_RECT_F backRc = RcWH(card.left + 20.0f * s, card.top + 14.0f * s, 76.0f * s, 28.0f * s);
+            if (w::TextButton(r, ui, Id("card.sl.back"), backRc, i18n::Literal(L"‹ Geri"), false)) {
+                m_cardMode = m_cardSubListPrevMode;
+                m_cardSubListInput.focused = false;
+                host.Invalidate();
+                return;
+            }
+            titleLeft = backRc.right + 12.0f * s;
+        }
+
+        r.Text(L"📁 " + row.title, Rc(titleLeft, card.top + 15.0f * s, closeRc.left - 10.0f * s, card.top + 41.0f * s),
+               theme::Text, 16.0f * s, Renderer::Align::Left, Renderer::Weight::Bold);
+        r.Text(i18n::Literal(L"Bu mangayı dilediğiniz kadar alt listeye ekleyip gruplayabilirsiniz."),
+               Rc(card.left + 20.0f * s, card.top + 48.0f * s, card.right - 20.0f * s, card.top + 70.0f * s),
+               theme::TextMuted, 12.5f * s);
+
+        // Hizli yeni alt liste olustur ve bu mangayi ekle cubugu
+        const float createW = 104.0f * s;
+        const float barY = card.top + 78.0f * s;
+        const float barH = 34.0f * s;
+        const D2D1_RECT_F createBtnRc = RcWH(card.right - 20.0f * s - createW, barY, createW, barH);
+        const D2D1_RECT_F inputRc = Rc(card.left + 20.0f * s, barY, createBtnRc.left - 8.0f * s, barY + barH);
+        m_cardSubListInput.Draw(r, ui, Id("card.sl.input"), inputRc, i18n::Literal(L"Yeni alt liste oluştur ve bu mangayı ekle..."), false, 0.0);
+
+        const bool createClicked = w::TextButton(r, ui, Id("card.sl.create"), createBtnRc, i18n::Literal(L"Oluştur"), true);
+        if (createClicked || m_cardSubListSubmitPending) {
+            m_cardSubListSubmitPending = false;
+            std::string rawUtf8 = ToUtf8(m_cardSubListInput.text);
+            const size_t f = rawUtf8.find_first_not_of(" \t\r\n");
+            const std::string trimmed = (f == std::string::npos) ? std::string() : rawUtf8.substr(f, rawUtf8.find_last_not_of(" \t\r\n") - f + 1);
+            if (!trimmed.empty()) {
+                lib.AddCustomList(trimmed);
+                // Match canonical name if case-insensitively existing
+                std::string targetList = trimmed;
+                for (const auto& existing : lib.CustomLists()) {
+                    if (ToLowerInvariant(FromUtf8(existing)) == ToLowerInvariant(FromUtf8(trimmed))) {
+                        targetList = existing;
+                        break;
+                    }
+                }
+                lib.SetGroupSubList(targetKeys, targetList, true);
+                m_cardSubListInput.Clear();
+                m_rowsRev = 0;
+                m_displayDirty = true;
+                RebuildRows(lib);
+                RebuildDisplayItems(set);
+                host.Toast(i18n::Literal(L"Alt liste oluşturuldu."));
+                host.Invalidate();
+                return;
+            }
+        }
+
+        const float sepY = barY + barH + 12.0f * s;
+        r.Line(card.left + 20.0f * s, sepY, card.right - 20.0f * s, sepY, theme::Border, 1.0f * s, 0.4f);
+
+        const D2D1_RECT_F listRc = Rc(card.left + 20.0f * s, sepY + 10.0f * s, card.right - 20.0f * s, card.bottom - 16.0f * s);
+        const auto& customLists = lib.CustomLists();
+        if (customLists.empty()) {
+            r.Text(i18n::Literal(L"Henüz alt liste yok. Yukarıdan ilk alt listenizi oluşturun!"),
+                   listRc, theme::TextMuted, 13.5f * s, Renderer::Align::Center);
+            return;
+        }
+
+        const float itemH = 40.0f * s;
+        const float itemGap = 6.0f * s;
+        const float pitch = itemH + itemGap;
+        const float totalH = (float)customLists.size() * pitch - itemGap;
+        m_cardSubListsMaxScroll = std::max(0.0f, totalH - RcH(listRc));
+        m_cardSubListsScroll = std::clamp(m_cardSubListsScroll, 0.0f, m_cardSubListsMaxScroll);
+
+        r.PushClip(listRc);
+        for (size_t i = 0; i < customLists.size(); ++i) {
+            const float iy = listRc.top + (float)i * pitch - m_cardSubListsScroll;
+            if (iy + itemH < listRc.top || iy > listRc.bottom) continue;
+
+            const std::string& cl = customLists[i];
+            bool inList = false;
+            for (const auto& k : targetKeys) {
+                if (lib.SeriesHasSubList(k, cl)) { inList = true; break; }
+            }
+
+            const D2D1_RECT_F itemRc = RcWH(listRc.left, iy, RcW(listRc) - (m_cardSubListsMaxScroll > 0 ? 10.0f * s : 0.0f), itemH);
+            const D2D1_RECT_F hitRc = Rc(itemRc.left, std::max(itemRc.top, listRc.top), itemRc.right, std::min(itemRc.bottom, listRc.bottom));
+            const uint32_t rowId = Id("card.sl.item", Id(cl.c_str()));
+            const bool clicked = RcH(hitRc) > 4.0f && ui.Button(rowId, hitRc);
+
+            r.FillRound(itemRc, 10.0f * s, inList ? theme::Active : theme::Panel, inList ? 0.24f : 1.0f);
+            if (ui.Hot(rowId)) r.FillRound(itemRc, 10.0f * s, theme::White, 0.06f);
+            r.StrokeRound(itemRc, 10.0f * s, inList ? theme::ActiveEdge : theme::Border, (inList ? 1.5f : 1.0f) * s, inList ? 0.85f : 0.55f);
+
+            const std::wstring checkMark = inList ? L"✓" : L"+";
+            r.Text(checkMark, RcWH(itemRc.left + 12.0f * s, itemRc.top, 24.0f * s, itemH),
+                   inList ? theme::Accent : theme::TextMuted, 15.0f * s, Renderer::Align::Center, Renderer::Weight::Bold);
+
+            const int totalInCl = lib.CountSeriesInSubList(cl);
+            const std::wstring cntStr = std::to_wstring(totalInCl);
+            r.Text(cntStr, Rc(itemRc.right - 64.0f * s, itemRc.top, itemRc.right - 14.0f * s, itemRc.bottom),
+                   theme::TextMuted, 12.0f * s, Renderer::Align::Right);
+
+            r.Text(FromUtf8(cl), Rc(itemRc.left + 40.0f * s, itemRc.top, itemRc.right - 72.0f * s, itemRc.bottom),
+                   theme::Text, 13.5f * s, Renderer::Align::Left, inList ? Renderer::Weight::Semibold : Renderer::Weight::Normal);
+
+            if (clicked) {
+                lib.SetGroupSubList(targetKeys, cl, !inList);
+                m_rowsRev = 0;
+                m_displayDirty = true;
+                RebuildRows(lib);
+                RebuildDisplayItems(set);
+                host.Invalidate();
+                r.PopClip();
+                return;
+            }
+        }
+        r.PopClip();
+        return;
+    }
+
     // ---------------------- MOD 0: GENEL BAKIS & KAYNAKLAR ----------------------
     std::vector<size_t> mirrorsForThisManga;
     for (size_t ri = 0; ri < m_rows.size(); ++ri) {
@@ -2582,6 +3102,21 @@ void LibraryView::DrawDetailCard(Renderer& r, Ui& ui, const D2D1_RECT_F& area, L
         if (!targetUrl.empty()) host.OpenUrl(targetUrl);
     }
     ui.Tip(Id("card.openweb"), i18n::Literal(L"Mangayı varsayılan sistem tarayıcısında aç"), openWebMode0Rc);
+
+    const D2D1_RECT_F subListsMode0Rc = Rc(openWebMode0Rc.right + 8.0f * s, y, card.right - 24.0f * s, y + 28.0f * s);
+    if (RcW(subListsMode0Rc) >= 60.0f * s) {
+        const std::wstring slBtnLbl = L"📁 " + std::wstring(i18n::Literal(L"Alt Listeler"));
+        if (w::TextButton(r, ui, Id("card.sublists"), subListsMode0Rc, slBtnLbl, !row.cats.empty())) {
+            m_cardSubListPrevMode = 0;
+            m_cardMode = 2;
+            m_cardSubListsScroll = 0.0f;
+            m_cardSubListInput.Clear();
+            m_cardSubListInput.focused = false;
+            host.Invalidate();
+            return;
+        }
+        ui.Tip(Id("card.sublists"), i18n::Literal(L"Alt listelere ekle veya çıkar"), subListsMode0Rc);
+    }
     y += 36*s;
     // Cizgi
     r.Line(card.left + 24.0f * s, y, card.right - 24.0f * s, y, theme::Border, 1.0f * s, 0.4f);

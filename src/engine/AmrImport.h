@@ -15,11 +15,12 @@ namespace gm::amr {
 enum class ImportError { None, ReadFailed, TooBig, BadJson, NotAmr, Empty };
 
 // Bir seride en fazla bu kadar kategori tutulur (Library birlestirirken de).
-inline constexpr size_t kMaxCats = 64;
+inline constexpr size_t kMaxCats = 256;
 
 struct ImportData {
     std::vector<Series> series;
     std::vector<Bookmark> bookmarks;
+    std::vector<std::string> customLists;
     int skipped = 0;        // adresi olmayan, okunamayan ya da olcusuz kayit
     bool v1 = false;        // AMR V1 bicimi (listeler JSON metni icinde)
     std::string detail;     // BadJson: gunluk icin ayrinti ("satir 3, sutun 14: ...")

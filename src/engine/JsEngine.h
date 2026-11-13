@@ -43,7 +43,7 @@ public:
     JSRuntime* Rt() const { return m_rt; }
 
 private:
-    static int InterruptCallback(JSRuntime* rt, void* opaque);
+    static int InterruptCallback(JSContext* ctx, void* opaque);
 
     JSRuntime* m_rt = nullptr;
     JSContext* m_ctx = nullptr;

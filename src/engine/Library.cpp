@@ -92,6 +92,31 @@ json::Value BookmarkToJson(const Bookmark& b) {
 
 } // namespace
 
+void Library::SyncCustomListsFromSeries() {
+    std::vector<std::string> merged;
+    std::unordered_set<std::string> seen;
+    auto pushClean = [&](const std::string& raw) {
+        if (merged.size() >= 4096) return;
+        std::string s = raw;
+        for (char& c : s) if ((unsigned char)c < 0x20) c = ' ';
+        const size_t f = s.find_first_not_of(" \t\r\n");
+        if (f == std::string::npos) return;
+        const size_t l = s.find_last_not_of(" \t\r\n");
+        s = s.substr(f, l - f + 1);
+        if (s.size() > 128) {
+            size_t n = 128;
+            while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) --n;
+            s.resize(n);
+        }
+        if (!s.empty() && seen.insert(s).second) merged.push_back(std::move(s));
+    };
+    for (const auto& c : m_customLists) pushClean(c);
+    for (const auto& s : m_series) {
+        for (const auto& c : s.cats) pushClean(c);
+    }
+    m_customLists = std::move(merged);
+}
+
 bool Library::ParseInto(const std::string& text) {
     // Kendi dosyamiz da AMR uzun alan adlariyla yazilir: ayni okuyucu.
     amr::ImportData data;
@@ -102,7 +127,9 @@ bool Library::ParseInto(const std::string& text) {
     }
     m_series = std::move(data.series);
     m_bookmarks = std::move(data.bookmarks);
+    m_customLists = std::move(data.customLists);
     for (Series& s : m_series) s.hasState = s.hasDisplayName = true;
+    SyncCustomListsFromSeries();
     return true;
 }
 
@@ -111,6 +138,7 @@ void Library::Load(const std::wstring& path) {
     m_aside.clear();
     m_series.clear();
     m_bookmarks.clear();
+    m_customLists.clear();
     m_saveBlocked = false;
     m_note = LoadNote::None;
     ++m_rev;
@@ -133,6 +161,7 @@ void Library::Load(const std::wstring& path) {
     } catch (const std::bad_alloc&) {
         m_series.clear();
         m_bookmarks.clear();
+        m_customLists.clear();
         m_saveBlocked = true;
         m_note = LoadNote::Blocked;
         log::Write(L"Kutuphane dosyasi bellege sigmadi; bu oturumda uzerine yazilmayacak.");
@@ -175,6 +204,7 @@ void Library::Load(const std::wstring& path) {
         if (br != fileio::ReadResult::Ok && br != fileio::ReadResult::Missing) {
             m_series.clear();
             m_bookmarks.clear();
+            m_customLists.clear();
             m_saveBlocked = true;
             m_note = LoadNote::Blocked;
             log::Write(L"Kutuphane yedegi okunamadi; bu oturumda uzerine yazilmayacak.");
@@ -183,6 +213,7 @@ void Library::Load(const std::wstring& path) {
     } catch (const std::bad_alloc&) {
         m_series.clear();
         m_bookmarks.clear();
+        m_customLists.clear();
         m_saveBlocked = true;
         m_note = LoadNote::Blocked;
         log::Write(L"Kutuphane yedegi okunurken bellek yetmedi; bu oturumda uzerine yazilmayacak.");
@@ -190,6 +221,7 @@ void Library::Load(const std::wstring& path) {
     }
     m_series.clear();
     m_bookmarks.clear();
+    m_customLists.clear();
     m_note = LoadNote::ResetCorrupt;
 }
 
@@ -198,7 +230,7 @@ bool Library::Save() {
     // Okuyucunun deger siniri (json::kMaxValues) asilacaksa yazma: dosya bir
     // sonraki acilista "bozuk" sayilip kenara alinirdi. Seri basina en fazla
     // 26 deger (nesne + alanlar + cats dizisi) ve kategori basina 1 deger.
-    size_t values = 8 + m_bookmarks.size() * 11;
+    size_t values = 10 + m_bookmarks.size() * 11 + m_customLists.size();
     for (const Series& s : m_series) values += 32 + s.cats.size() + s.chapters.size() * 3;
     if (values > json::kMaxValues) {
         log::Write(L"Kutuphane cok buyuk (%zu seri); kaydedilmedi.", m_series.size());
@@ -216,6 +248,11 @@ bool Library::Save() {
         Value bms = Value::Arr();
         for (const Bookmark& b : m_bookmarks) bms.Push(BookmarkToJson(b));
         root.Add("bookmarks", std::move(bms));
+        if (!m_customLists.empty()) {
+            Value cls = Value::Arr();
+            for (const std::string& cl : m_customLists) cls.Push(Value::Str(cl));
+            root.Add("customLists", std::move(cls));
+        }
         text = json::Dump(root);
     } catch (const std::bad_alloc&) {
         log::Write(L"Kutuphane kaydedilemedi: bellek yetmedi.");
@@ -230,7 +267,7 @@ bool Library::Save() {
     return fileio::WriteAtomic(m_path, text, true);
 }
 
-Library::MergeResult Library::Merge(std::vector<Series>&& series, std::vector<Bookmark>&& bookmarks) {
+Library::MergeResult Library::Merge(std::vector<Series>&& series, std::vector<Bookmark>&& bookmarks, std::vector<std::string> customLists) {
     MergeResult res;
     std::unordered_map<std::string, size_t> index;
     index.reserve(m_series.size() + series.size());
@@ -319,7 +356,13 @@ Library::MergeResult Library::Merge(std::vector<Series>&& series, std::vector<Bo
         }
     }
 
-    if (res.added || res.updated || bmChanged) ++m_rev;
+    bool clChanged = false;
+    const size_t prevListCount = m_customLists.size();
+    for (const auto& cl : customLists) m_customLists.push_back(cl);
+    SyncCustomListsFromSeries();
+    if (m_customLists.size() != prevListCount) clChanged = true;
+
+    if (res.added || res.updated || bmChanged || clChanged) ++m_rev;
     return res;
 }
 
@@ -506,8 +549,14 @@ bool Library::AddSeries(const Series& s) {
     }
     Series toAdd = s;
     if (toAdd.addedTs <= 0) toAdd.addedTs = NowEpochMs();
+    auto prevLists = m_customLists;
     m_series.push_back(std::move(toAdd));
-    if (!Save()) { m_series.pop_back(); return false; }
+    SyncCustomListsFromSeries();
+    if (!Save()) {
+        m_series.pop_back();
+        m_customLists = std::move(prevLists);
+        return false;
+    }
     ++m_rev;
     return true;
 }
@@ -560,11 +609,14 @@ bool Library::MarkReadUpToLatest(const std::string& key) {
 bool Library::ClearAll() {
     auto previousSeries = std::move(m_series);
     auto previousBookmarks = std::move(m_bookmarks);
+    auto previousLists = std::move(m_customLists);
     m_series.clear();
     m_bookmarks.clear();
+    m_customLists.clear();
     if (!Save()) {
         m_series = std::move(previousSeries);
         m_bookmarks = std::move(previousBookmarks);
+        m_customLists = std::move(previousLists);
         return false;
     }
     ++m_rev;
@@ -716,6 +768,8 @@ bool Library::ConvertAndOptimize(int& fixedCount) {
         }
     }
     m_bookmarks = std::move(uniqueBookmarks);
+    for (auto& cl : m_customLists) cl = CleanStr(cl);
+    SyncCustomListsFromSeries();
 
     ++m_rev;
     Save();
@@ -769,6 +823,187 @@ void Library::GetStandardCategoryCounts(int& newCount, int& unreadCount, int& on
         }
         if (isOneShot) ++oneshotCount;
     }
+}
+
+static std::string NormalizeSubListName(const std::string& raw) {
+    std::string s = CleanStr(raw);
+    for (char& c : s) if ((unsigned char)c < 0x20) c = ' ';
+    s = CleanStr(s);
+    if (s.size() > 128) {
+        size_t n = 128;
+        while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) --n;
+        s.resize(n);
+    }
+    return s;
+}
+
+static bool EqualsCaseInsensitiveUtf8(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    const std::wstring wa = FromUtf8(a);
+    const std::wstring wb = FromUtf8(b);
+    return CompareStringEx(LOCALE_NAME_INVARIANT, LINGUISTIC_IGNORECASE,
+                           wa.c_str(), (int)wa.size(), wb.c_str(), (int)wb.size(),
+                           nullptr, nullptr, 0) == CSTR_EQUAL;
+}
+
+bool Library::AddCustomList(const std::string& name) {
+    const std::string cleaned = NormalizeSubListName(name);
+    if (cleaned.empty() || m_customLists.size() >= 4096) return false;
+    for (const auto& existing : m_customLists) {
+        if (EqualsCaseInsensitiveUtf8(existing, cleaned)) return false;
+    }
+    auto prev = m_customLists;
+    m_customLists.push_back(cleaned);
+    if (!Save()) {
+        m_customLists = std::move(prev);
+        return false;
+    }
+    ++m_rev;
+    return true;
+}
+
+bool Library::RenameCustomList(const std::string& oldName, const std::string& newName) {
+    const std::string cleanNew = NormalizeSubListName(newName);
+    if (oldName.empty() || cleanNew.empty() || oldName == cleanNew) return false;
+
+    auto it = std::find(m_customLists.begin(), m_customLists.end(), oldName);
+    if (it == m_customLists.end()) return false;
+
+    auto prevLists = m_customLists;
+    auto prevSeries = m_series;
+
+    // Update or merge in m_customLists
+    auto existingTarget = std::find_if(m_customLists.begin(), m_customLists.end(), [&](const std::string& x) {
+        return x != oldName && x == cleanNew;
+    });
+    if (existingTarget != m_customLists.end()) {
+        m_customLists.erase(it);
+    } else {
+        *it = cleanNew;
+    }
+
+    // Update every series carrying oldName
+    for (auto& s : m_series) {
+        bool hadOld = false;
+        bool hasNew = false;
+        for (const auto& c : s.cats) {
+            if (c == oldName) hadOld = true;
+            if (c == cleanNew) hasNew = true;
+        }
+        if (!hadOld) continue;
+        std::vector<std::string> nextCats;
+        nextCats.reserve(s.cats.size());
+        for (const auto& c : s.cats) {
+            if (c == oldName) {
+                if (!hasNew) {
+                    nextCats.push_back(cleanNew);
+                    hasNew = true;
+                }
+            } else {
+                nextCats.push_back(c);
+            }
+        }
+        s.cats = std::move(nextCats);
+    }
+
+    if (!Save()) {
+        m_customLists = std::move(prevLists);
+        m_series = std::move(prevSeries);
+        return false;
+    }
+    ++m_rev;
+    return true;
+}
+
+bool Library::DeleteCustomList(const std::string& name) {
+    if (name.empty()) return false;
+    auto prevLists = m_customLists;
+    auto prevSeries = m_series;
+
+    bool changed = false;
+    const auto oldSize = m_customLists.size();
+    m_customLists.erase(std::remove(m_customLists.begin(), m_customLists.end(), name), m_customLists.end());
+    if (m_customLists.size() != oldSize) changed = true;
+
+    for (auto& s : m_series) {
+        const auto prevCatSize = s.cats.size();
+        s.cats.erase(std::remove(s.cats.begin(), s.cats.end(), name), s.cats.end());
+        if (s.cats.size() != prevCatSize) changed = true;
+    }
+
+    if (!changed) return false;
+    if (!Save()) {
+        m_customLists = std::move(prevLists);
+        m_series = std::move(prevSeries);
+        return false;
+    }
+    ++m_rev;
+    return true;
+}
+
+bool Library::SetSeriesSubList(const std::string& key, const std::string& listName, bool inList) {
+    if (key.empty()) return false;
+    return SetGroupSubList({ key }, listName, inList);
+}
+
+bool Library::SetGroupSubList(const std::vector<std::string>& keys, const std::string& listName, bool inList) {
+    const std::string cleanList = NormalizeSubListName(listName);
+    if (keys.empty() || cleanList.empty()) return false;
+
+    auto prevLists = m_customLists;
+    auto prevSeries = m_series;
+    bool changed = false;
+
+    if (inList) {
+        if (std::find(m_customLists.begin(), m_customLists.end(), cleanList) == m_customLists.end()) {
+            if (m_customLists.size() < 4096) {
+                m_customLists.push_back(cleanList);
+                changed = true;
+            }
+        }
+    }
+
+    for (const auto& key : keys) {
+        const size_t idx = FindSeriesIndex(m_series, key);
+        if (idx == std::string::npos) continue;
+        auto& cats = m_series[idx].cats;
+        auto it = std::find(cats.begin(), cats.end(), cleanList);
+        if (inList) {
+            if (it == cats.end() && cats.size() < amr::kMaxCats) {
+                cats.push_back(cleanList);
+                changed = true;
+            }
+        } else {
+            if (it != cats.end()) {
+                cats.erase(it);
+                changed = true;
+            }
+        }
+    }
+
+    if (!changed) return false;
+    if (!Save()) {
+        m_customLists = std::move(prevLists);
+        m_series = std::move(prevSeries);
+        return false;
+    }
+    ++m_rev;
+    return true;
+}
+
+bool Library::SeriesHasSubList(const std::string& key, const std::string& listName) const {
+    const Series* s = FindSeries(key);
+    if (!s || listName.empty()) return false;
+    return std::find(s->cats.begin(), s->cats.end(), listName) != s->cats.end();
+}
+
+int Library::CountSeriesInSubList(const std::string& listName) const {
+    if (listName.empty()) return (int)m_series.size();
+    int count = 0;
+    for (const auto& s : m_series) {
+        if (std::find(s.cats.begin(), s.cats.end(), listName) != s.cats.end()) ++count;
+    }
+    return count;
 }
 
 } // namespace gm

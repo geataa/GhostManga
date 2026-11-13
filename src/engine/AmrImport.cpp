@@ -63,6 +63,16 @@ std::string Clip(std::string s, size_t max) {
     return s;
 }
 
+std::string TrimCatName(std::string s) {
+    for (char& c : s) {
+        if ((unsigned char)c < 0x20) c = ' ';
+    }
+    const size_t first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const size_t last = s.find_last_not_of(" \t\r\n");
+    return Clip(s.substr(first, last - first + 1), kMaxCatLen);
+}
+
 std::vector<std::string> Cats(const json::Value& o) {
     std::vector<std::string> out;
     const json::Value* v = Field(o, "c", "cats");
@@ -304,13 +314,17 @@ ImportError ParseExport(std::string_view text, ImportData& out) {
 
     const json::Value* mangasIn = nullptr;
     const json::Value* bookmarksIn = nullptr;
+    const json::Value* customListsIn = nullptr;
+    const json::Value* categoriesIn = nullptr;
     if (root.IsObject()) {
         mangasIn = root.Get("mangas");
         bookmarksIn = root.Get("bookmarks");
+        customListsIn = root.Get("customLists");
+        categoriesIn = root.Get("categories");
     } else if (root.IsArray()) {
         mangasIn = &root; // yalniz liste kaydedilmis: hosgoruyle kabul et
     }
-    if (!mangasIn && !bookmarksIn) return ImportError::NotAmr;
+    if (!mangasIn && !bookmarksIn && !customListsIn) return ImportError::NotAmr;
 
     std::unordered_map<std::string, size_t> seen;
     if (mangasIn && !mangasIn->IsNull()) {
@@ -353,7 +367,37 @@ ImportError ParseExport(std::string_view text, ImportData& out) {
         }
     }
 
-    if (out.series.empty() && out.bookmarks.empty()) return ImportError::Empty;
+    std::unordered_set<std::string> seenLists;
+    auto pushCustomList = [&](const std::string& raw) {
+        if (out.customLists.size() >= 4096) return;
+        std::string cleaned = TrimCatName(raw);
+        if (!cleaned.empty() && seenLists.insert(cleaned).second) {
+            out.customLists.push_back(std::move(cleaned));
+        }
+    };
+    if (customListsIn && customListsIn->IsArray()) {
+        for (const json::Value& e : customListsIn->arr) {
+            if (e.IsString()) pushCustomList(e.str);
+        }
+    }
+    if (categoriesIn && !categoriesIn->IsNull()) {
+        json::Value holder;
+        const json::Value* list = nullptr;
+        bool wasString = false;
+        if (Unwrap(*categoriesIn, holder, list, wasString) && list->IsArray()) {
+            for (const json::Value& e : list->arr) {
+                if (e.IsString()) {
+                    pushCustomList(e.str);
+                } else if (e.IsObject()) {
+                    const std::string type = Str(e, "type", nullptr);
+                    if (type == "native" || type == "language") continue;
+                    pushCustomList(Str(e, "name", nullptr));
+                }
+            }
+        }
+    }
+
+    if (out.series.empty() && out.bookmarks.empty() && out.customLists.empty()) return ImportError::Empty;
     return ImportError::None;
 }
 
@@ -419,6 +463,12 @@ bool ExportAmrFile(const std::wstring& path, const Library& lib) {
         bmArr.Push(std::move(bm));
     }
     root.Add("bookmarks", std::move(bmArr));
+
+    if (!lib.CustomLists().empty()) {
+        Value clArr = Value::Arr();
+        for (const auto& cl : lib.CustomLists()) clArr.Push(Value::Str(cl));
+        root.Add("customLists", std::move(clArr));
+    }
 
     std::string text = Dump(root);
     return fileio::WriteAtomic(path, text);

@@ -1,5 +1,7 @@
 #include "HttpClient.h"
 #include "../core/Utf8.h"
+#include <objbase.h>
+#include "WebView2.h"
 #include <algorithm>
 #include <sstream>
 #include <vector>
@@ -41,11 +43,39 @@ HttpClient::~HttpClient() {
     Close();
 }
 
+const std::wstring& HttpClient::DefaultUserAgent() {
+    static const std::wstring kUa = []() -> std::wstring {
+        std::wstring major = L"142";
+        PWSTR ver = nullptr;
+        if (SUCCEEDED(GetAvailableCoreWebView2BrowserVersionString(nullptr, &ver)) && ver) {
+            std::wstring raw(ver);
+            CoTaskMemFree(ver);
+            size_t i = 0;
+            while (i < raw.size() && raw[i] >= L'0' && raw[i] <= L'9') ++i;
+            if (i >= 3 && i <= 4) {
+                int parsed = 0;
+                for (size_t k = 0; k < i; ++k) parsed = parsed * 10 + (raw[k] - L'0');
+                if (parsed >= 130 && parsed <= 999) {
+                    major = raw.substr(0, i);
+                }
+            }
+        }
+        return L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/"
+             + major + L".0.0.0 Safari/537.36";
+    }();
+    return kUa;
+}
+
+const std::string& HttpClient::DefaultUserAgentUtf8() {
+    static const std::string kUa8 = ToUtf8(DefaultUserAgent());
+    return kUa8;
+}
+
 bool HttpClient::Init(const std::wstring& userAgent) {
     if (m_session) return true;
 
-    std::wstring ua = userAgent.empty()
-        ? L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    const std::wstring& ua = userAgent.empty()
+        ? DefaultUserAgent()
         : userAgent;
 
     m_session = WinHttpOpen(ua.c_str(),

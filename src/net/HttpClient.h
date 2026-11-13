@@ -46,6 +46,9 @@ public:
 
     HttpResponse Send(const HttpRequest& req);
 
+    static const std::wstring& DefaultUserAgent();
+    static const std::string& DefaultUserAgentUtf8();
+
 private:
     HINTERNET m_session = nullptr;
 };

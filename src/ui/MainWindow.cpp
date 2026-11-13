@@ -742,7 +742,7 @@ void MainWindow::ImportAmrFile(const std::wstring& path) {
     bool saved = false;
     try {
         Library next = m_lib;
-        res = next.Merge(std::move(data.series), std::move(data.bookmarks));
+        res = next.Merge(std::move(data.series), std::move(data.bookmarks), std::move(data.customLists));
         saved = next.Save();
         if (saved) m_lib = std::move(next);
     } catch (const std::bad_alloc&) {
@@ -2812,12 +2812,44 @@ void MainWindow::DrawDrawer(const D2D1_RECT_F& content, double now) {
         y += Dp(36);
     }
     {
+        const float byGuard = panel.bottom - Dp(106);
+        const auto& customLists = m_lib.CustomLists();
+        for (size_t ci = 0; ci < customLists.size() && y + Dp(70) < byGuard; ++ci) {
+            const std::string& cl = customLists[ci];
+            const bool active = (m_library.ActiveSubList() == cl && m_view == View::Library);
+            const D2D1_RECT_F row = Rc(panel.left + Dp(8), y, panel.right - Dp(8), y + Dp(32));
+            const uint32_t cid = Id("drawer.sublist", Id(cl.c_str()));
+            if (m_ui.Button(cid, row)) {
+                m_library.SetActiveSubList(active ? std::string() : cl);
+                m_library.SetTab(0);
+                SetView(View::Library);
+                m_drawerOpen = false;
+                m_dirty = true;
+            }
+            if (active) m_r.FillRound(row, Dp(8), theme::Elevated, 1.0f);
+            else if (m_ui.Hot(cid)) m_r.FillRound(row, Dp(8), theme::White, 0.06f);
+            DrawIcon(m_r, Icon::Folder, RcWH(row.left + Dp(10), row.top, Dp(24), Dp(32)), Dp(15), active ? theme::Accent : theme::TextDim);
+            m_r.Text(FromUtf8(cl), Rc(row.left + Dp(44), row.top, row.right - Dp(42), row.bottom),
+                     active ? theme::Text : theme::TextDim, Dp(13.0f), Renderer::Align::Left,
+                     active ? Renderer::Weight::Semibold : Renderer::Weight::Normal);
+            wchar_t clCnt[32];
+            swprintf_s(clCnt, L"%d", m_lib.CountSeriesInSubList(cl));
+            m_r.Text(clCnt, Rc(row.right - Dp(40), row.top, row.right - Dp(12), row.bottom), theme::TextMuted, Dp(12.0f),
+                     Renderer::Align::Right, Renderer::Weight::Normal, 1.0f, false, false, true);
+            y += Dp(34);
+        }
+
         const D2D1_RECT_F row = Rc(panel.left + Dp(8), y, panel.right - Dp(8), y + Dp(34));
         const uint32_t id = Id("drawer.addcat");
-        if (m_ui.Button(id, row)) Toast(i18n::Literal(L"Kategori filtreleri çekmeceden ayarlanabilir."));
+        if (m_ui.Button(id, row)) {
+            m_drawerOpen = false;
+            SetView(View::Library);
+            m_library.OpenCreateSubListModal();
+            m_dirty = true;
+        }
         if (m_ui.Hot(id)) m_r.FillRound(row, Dp(8), theme::White, 0.06f);
-        DrawIcon(m_r, Icon::Plus, RcWH(row.left + Dp(10), row.top, Dp(24), Dp(34)), Dp(16), theme::TextMuted);
-        m_r.Text(T(S::AddCategory), Rc(row.left + Dp(44), row.top, row.right - Dp(12), row.bottom), theme::TextMuted, Dp(13.5f));
+        DrawIcon(m_r, Icon::Plus, RcWH(row.left + Dp(10), row.top, Dp(24), Dp(34)), Dp(16), theme::Accent);
+        m_r.Text(T(S::AddCategory), Rc(row.left + Dp(44), row.top, row.right - Dp(12), row.bottom), theme::Text, Dp(13.5f));
     }
 
     // Alt: son tarama

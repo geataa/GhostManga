@@ -5,11 +5,32 @@
 #ifndef __core_webview2_environment_options_h__
 #define __core_webview2_environment_options_h__
 
+// Adding the definition of this macro to enable unsafe buffer usage
+#ifndef UNSAFE_BUFFERS
+#if defined(__clang__)
+
+// clang-format off
+#define UNSAFE_BUFFERS(...)                  \
+  _Pragma("clang unsafe_buffer_usage begin") \
+  __VA_ARGS__                                \
+  _Pragma("clang unsafe_buffer_usage end")
+// clang-format on
+
+#else
+#define UNSAFE_BUFFERS(...) __VA_ARGS__
+#endif
+#endif
+
 #include <objbase.h>
+
 #include <wrl/implements.h>
 
+#include <algorithm>
+#include <limits>
+#include <string>
+
 #include "WebView2.h"
-#define CORE_WEBVIEW_TARGET_PRODUCT_VERSION L"132.0.2957.106"
+#define CORE_WEBVIEW_TARGET_PRODUCT_VERSION L"156.0.4314.35"
 
 #define COREWEBVIEW2ENVIRONMENTOPTIONS_STRING_PROPERTY(p)     \
  public:                                                      \
@@ -47,49 +68,52 @@
  protected:                                                      \
   BOOL m_##p = defPVal ? TRUE : FALSE;
 
-#define DEFINE_AUTO_COMEM_STRING()                                      \
- protected:                                                             \
-  class AutoCoMemString {                                               \
-   public:                                                              \
-    AutoCoMemString() {}                                                \
-    ~AutoCoMemString() { Release(); }                                   \
-    void Release() {                                                    \
-      if (m_string) {                                                   \
-        deallocate_fn(m_string);                                        \
-        m_string = nullptr;                                             \
-      }                                                                 \
-    }                                                                   \
-                                                                        \
-    LPCWSTR Set(LPCWSTR str) {                                          \
-      Release();                                                        \
-      if (str) {                                                        \
-        m_string = MakeCoMemString(str);                                \
-      }                                                                 \
-      return m_string;                                                  \
-    }                                                                   \
-    LPCWSTR Get() { return m_string; }                                  \
-    LPWSTR Copy() {                                                     \
-      if (m_string)                                                     \
-        return MakeCoMemString(m_string);                               \
-      return nullptr;                                                   \
-    }                                                                   \
-                                                                        \
-   protected:                                                           \
-    LPWSTR MakeCoMemString(LPCWSTR source) {                            \
-      const size_t length = wcslen(source);                             \
-      const size_t bytes = (length + 1) * sizeof(*source);              \
-                                                                        \
-      if (bytes <= length) {                                            \
-        return nullptr;                                                 \
-      }                                                                 \
-                                                                        \
-      wchar_t* result = reinterpret_cast<wchar_t*>(allocate_fn(bytes)); \
-                                                                        \
-      if (result)                                                       \
-        memcpy(result, source, bytes);                                  \
-      return result;                                                    \
-    }                                                                   \
-    LPWSTR m_string = nullptr;                                          \
+#define DEFINE_AUTO_COMEM_STRING()                                            \
+ protected:                                                                   \
+  class AutoCoMemString {                                                     \
+   public:                                                                    \
+    AutoCoMemString() {}                                                      \
+    ~AutoCoMemString() {                                                      \
+      Release();                                                              \
+    }                                                                         \
+    void Release() {                                                          \
+      if (m_string) {                                                         \
+        deallocate_fn(m_string);                                              \
+        m_string = nullptr;                                                   \
+      }                                                                       \
+    }                                                                         \
+                                                                              \
+    LPCWSTR Set(LPCWSTR str) {                                                \
+      Release();                                                              \
+      if (str) {                                                              \
+        m_string = MakeCoMemString(str);                                      \
+      }                                                                       \
+      return m_string;                                                        \
+    }                                                                         \
+    LPCWSTR Get() {                                                           \
+      return m_string;                                                        \
+    }                                                                         \
+    LPWSTR Copy() {                                                           \
+      if (m_string)                                                           \
+        return MakeCoMemString(m_string);                                     \
+      return nullptr;                                                         \
+    }                                                                         \
+                                                                              \
+   protected:                                                                 \
+    LPWSTR MakeCoMemString(LPCWSTR source) {                                  \
+      const size_t length = wcslen(source);                                   \
+      if (length >= (std::numeric_limits<size_t>::max)() / sizeof(*source)) { \
+        return nullptr;                                                       \
+      }                                                                       \
+                                                                              \
+      const size_t bytes = (length + 1) * sizeof(*source);                    \
+      wchar_t* result = reinterpret_cast<wchar_t*>(allocate_fn(bytes));       \
+                                                                              \
+      if (result)                                                             \
+        std::char_traits<wchar_t>::copy(result, source, length + 1);          \
+      return result;                                                          \
+    }                                                                         \
+    LPWSTR m_string = nullptr;                                                \
   };
 
 template <typename allocate_fn_t,
@@ -134,17 +158,18 @@ class CoreWebView2CustomSchemeRegistrationBase
       if (!(*allowedOrigins)) {
         return HRESULT_FROM_WIN32(GetLastError());
       }
-      ZeroMemory(*allowedOrigins, m_allowedOriginsCount * sizeof(LPWSTR));
+      std::fill_n((*allowedOrigins), m_allowedOriginsCount,
+                  static_cast<LPWSTR>(nullptr));
       for (UINT32 i = 0; i < m_allowedOriginsCount; i++) {
-        (*allowedOrigins)[i] = m_allowedOrigins[i].Copy();
-        if (!(*allowedOrigins)[i]) {
-          HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
-          for (UINT32 j = 0; j < i; j++) {
-            deallocate_fn((*allowedOrigins)[j]);
-          }
-          deallocate_fn(*allowedOrigins);
-          return hr;
-        }
+        UNSAFE_BUFFERS((*allowedOrigins)[i] = m_allowedOrigins[i].Copy();
+                       if (!(*allowedOrigins)[i]) {
+                         HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+                         for (UINT32 j = 0; j < i; j++) {
+                           deallocate_fn((*allowedOrigins)[j]);
+                         }
+                         deallocate_fn(*allowedOrigins);
+                         return hr;
+                       })
       }
       *allowedOriginsCount = m_allowedOriginsCount;
       return S_OK;
@@ -163,16 +188,16 @@ class CoreWebView2CustomSchemeRegistrationBase
         return HRESULT_FROM_WIN32(GetLastError());
       }
       for (UINT32 i = 0; i < allowedOriginsCount; i++) {
-        m_allowedOrigins[i].Set(allowedOrigins[i]);
-        if (!m_allowedOrigins[i].Get()) {
-          HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
-          for (UINT32 j = 0; j < i; j++) {
-            m_allowedOrigins[j].Release();
-          }
-          m_allowedOriginsCount = 0;
-          delete[] (m_allowedOrigins);
-          return hr;
-        }
+        UNSAFE_BUFFERS(m_allowedOrigins[i].Set(allowedOrigins[i]);
+                       if (!m_allowedOrigins[i].Get()) {
+                         HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+                         for (UINT32 j = 0; j < i; j++) {
+                           m_allowedOrigins[j].Release();
+                         }
+                         m_allowedOriginsCount = 0;
+                         delete[] (m_allowedOrigins);
+                         return hr;
+                       })
       }
       m_allowedOriginsCount = allowedOriginsCount;
       return S_OK;
@@ -180,7 +205,7 @@ class CoreWebView2CustomSchemeRegistrationBase
   }
 
  protected:
-  DEFINE_AUTO_COMEM_STRING();
+  DEFINE_AUTO_COMEM_STRING()
 
   void ReleaseAllowedOrigins() {
     if (m_allowedOrigins) {
@@ -190,8 +215,18 @@ class CoreWebView2CustomSchemeRegistrationBase
   }
 
   AutoCoMemString m_schemeName;
-  COREWEBVIEW2ENVIRONMENTOPTIONS_BOOL_PROPERTY(TreatAsSecure, false);
-  COREWEBVIEW2ENVIRONMENTOPTIONS_BOOL_PROPERTY(HasAuthorityComponent, false);
+  COREWEBVIEW2ENVIRONMENTOPTIONS_BOOL_PROPERTY(TreatAsSecure, false)
+  COREWEBVIEW2ENVIRONMENTOPTIONS_BOOL_PROPERTY(HasAuthorityComponent, false)
+
+  // WebView2EnvironmentOptions.h this is a publicly exposed header to clients
+  // and it used by them to integrate the webview2 enviorment as published at
+  // https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2environmentoptions?view=webview2-1.0.3179.45
+  // This file is not included in msedge.dll/lib/exe and is limited to WebView2
+  // SDK which does not use partition alloc. So need to use raw_ptr_exclusion
+  // here.
+#if defined(__has_attribute)
+  __attribute__((annotate("raw_ptr_exclusion")))
+#endif
   AutoCoMemString* m_allowedOrigins = nullptr;
   unsigned int m_allowedOriginsCount = 0;
 };
@@ -213,12 +248,10 @@ class CoreWebView2EnvironmentOptionsBase
           ICoreWebView2EnvironmentOptions7,
           ICoreWebView2EnvironmentOptions8> {
  public:
-  static const COREWEBVIEW2_RELEASE_CHANNELS kInternalChannel =
-      static_cast<COREWEBVIEW2_RELEASE_CHANNELS>(1 << 4);
   static const COREWEBVIEW2_RELEASE_CHANNELS kAllChannels =
       COREWEBVIEW2_RELEASE_CHANNELS_STABLE |
       COREWEBVIEW2_RELEASE_CHANNELS_BETA | COREWEBVIEW2_RELEASE_CHANNELS_DEV |
-      COREWEBVIEW2_RELEASE_CHANNELS_CANARY | kInternalChannel;
+      COREWEBVIEW2_RELEASE_CHANNELS_CANARY;
 
   CoreWebView2EnvironmentOptionsBase() {
     // Initialize the target compatible browser version value to the version
@@ -274,12 +307,14 @@ class CoreWebView2EnvironmentOptionsBase
   }
 
  protected:
-  ~CoreWebView2EnvironmentOptionsBase() { ReleaseCustomSchemeRegistrations(); };
+  ~CoreWebView2EnvironmentOptionsBase() { ReleaseCustomSchemeRegistrations(); }
 
   void ReleaseCustomSchemeRegistrations() {
     if (m_customSchemeRegistrations) {
       for (UINT32 i = 0; i < m_customSchemeRegistrationsCount; i++) {
-        m_customSchemeRegistrations[i]->Release();
+        // SAFETY: Since we can't convert the raw buffer to safe type we do a
+        // bound check and use the macro to mitigate the error.
+        UNSAFE_BUFFERS(m_customSchemeRegistrations[i])->Release();
       }
       deallocate_fn(m_customSchemeRegistrations);
       m_customSchemeRegistrations = nullptr;
@@ -288,6 +323,10 @@ class CoreWebView2EnvironmentOptionsBase
   }
 
  private:
+  // TODO(task.ms/56073082): Use raw_ptr.
+#if defined(__has_attribute)
+  __attribute__((annotate("raw_ptr_exclusion")))
+#endif
   ICoreWebView2CustomSchemeRegistration** m_customSchemeRegistrations = nullptr;
   unsigned int m_customSchemeRegistrationsCount = 0;
 
@@ -299,7 +338,7 @@ class CoreWebView2EnvironmentOptionsBase
   COREWEBVIEW2_SCROLLBAR_STYLE m_scrollbarStyle =
       COREWEBVIEW2_SCROLLBAR_STYLE_DEFAULT;
 
-  DEFINE_AUTO_COMEM_STRING();
+  DEFINE_AUTO_COMEM_STRING()
 
  public:
   // ICoreWebView2EnvironmentOptions
@@ -339,8 +378,11 @@ class CoreWebView2EnvironmentOptionsBase
         return HRESULT_FROM_WIN32(GetLastError());
       }
       for (UINT32 i = 0; i < m_customSchemeRegistrationsCount; i++) {
-        (*schemeRegistrations)[i] = m_customSchemeRegistrations[i];
-        (*schemeRegistrations)[i]->AddRef();
+        // SAFETY: Since we can't convert the raw buffer to safe type we do a
+        // bound check and use the macro to mitigate the error.
+        UNSAFE_BUFFERS((*schemeRegistrations)[i] =
+                           m_customSchemeRegistrations[i];
+                       (*schemeRegistrations)[i]->AddRef();)
       }
       *count = m_customSchemeRegistrationsCount;
       return S_OK;
@@ -358,8 +400,10 @@ class CoreWebView2EnvironmentOptionsBase
       return GetLastError();
     }
     for (UINT32 i = 0; i < count; i++) {
-      m_customSchemeRegistrations[i] = schemeRegistrations[i];
-      m_customSchemeRegistrations[i]->AddRef();
+      // SAFETY: Since we can't convert the raw buffer to safe type we do a
+      // bound check and use the macro to mitigate the error.
+      UNSAFE_BUFFERS(m_customSchemeRegistrations[i] = schemeRegistrations[i];
+                     m_customSchemeRegistrations[i]->AddRef());
     }
     m_customSchemeRegistrationsCount = count;
     return S_OK;

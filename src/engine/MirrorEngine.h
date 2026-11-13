@@ -48,6 +48,7 @@ public:
 
     // Enumerate all active mirrors
     const std::vector<MirrorInfo>& GetMirrors();
+    void RefreshMirrors();
     size_t GetMirrorsCount() const { return m_cachedMirrorsCount.load(std::memory_order_acquire); }
 
     // Query a mirror for manga matching search term

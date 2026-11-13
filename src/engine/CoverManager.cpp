@@ -366,7 +366,7 @@ bool CoverManager::DownloadCover(const Task& task) {
     req.url = task.url;
     req.timeoutMs = 5000;
     req.allowBrowserFallback = false; // Background cover scraping should never block or escalate to WebView2
-    req.headers.push_back({ "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" });
+    req.headers.push_back({ "User-Agent", net::HttpClient::DefaultUserAgentUtf8() });
 
     net::HttpResponse resp = net::Fetch(req, 80);
     if (!resp.success || resp.body.empty()) {
@@ -387,7 +387,7 @@ bool CoverManager::DownloadCover(const Task& task) {
     imgReq.timeoutMs = 7000;
     imgReq.allowBrowserFallback = false;
     imgReq.headers.push_back({ "Referer", task.url });
-    imgReq.headers.push_back({ "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" });
+    imgReq.headers.push_back({ "User-Agent", net::HttpClient::DefaultUserAgentUtf8() });
 
     net::HttpResponse imgResp = net::Fetch(imgReq, 50);
     if (!imgResp.success || imgResp.body.size() < 400 || !IsValidCoverBuffer(imgResp.body)) {

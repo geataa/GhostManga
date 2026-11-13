@@ -45,9 +45,14 @@ public:
     void SearchOtherSources(const std::wstring& title, ShellHost& host);
     bool IsSearchFocused() const { return m_tab == kLocal ? m_localSearch.focused : m_tab == kSearch ? (m_activeSearch && m_activeSearch->input.focused) : m_search.focused; }
     bool HasFocusedTextInput() const {
-        if (m_resetConfirmStep > 0 || (m_tab == kLocal && !m_localSelected.empty())) return false;
+        if (m_resetConfirmStep > 0 || m_subListModalMode == 3 || (m_tab == kLocal && !m_localSelected.empty())) return false;
+        if (m_subListModalMode == 1 || m_subListModalMode == 2) return m_subListInput.focused;
         if (m_chDropdownOpen) return m_chDropdownSearch.focused;
-        if (m_selectedRowIndex >= 0) return m_cardMode == 1 && m_chapterSearch.focused;
+        if (m_selectedRowIndex >= 0) {
+            if (m_cardMode == 1) return m_chapterSearch.focused;
+            if (m_cardMode == 2) return m_cardSubListInput.focused;
+            return false;
+        }
         return IsSearchFocused();
     }
     void RecheckRecent() { m_checkedOnce = false; m_localDataDirty = true; }
@@ -84,6 +89,22 @@ public:
     int FilterNew() const { return m_filterNew; }
     int FilterUnread() const { return m_filterUnread; }
     int FilterOneshot() const { return m_filterOneshot; }
+
+    const std::string& ActiveSubList() const { return m_activeSubList; }
+    void SetActiveSubList(const std::string& name) {
+        if (m_activeSubList != name) {
+            m_activeSubList = name;
+            m_scroll[kSeries] = 0.0f;
+            m_displayDirty = true;
+        }
+    }
+    void OpenCreateSubListModal() {
+        m_tab = kSeries;
+        m_subListModalMode = 1;
+        m_subListSubmitPending = false;
+        m_subListInput.Clear();
+        m_subListInput.focused = true;
+    }
 
 private:
     enum Tab { kSeries = 0, kLocal = 1, kBookmarks = 2, kSites = 3, kSearch = 4, kHealth = 5 };
@@ -123,6 +144,7 @@ private:
         bool stopped = false;
         bool caughtUp = false;
         bool updateFailed = false;
+        std::vector<std::string> cats;
     };
 
     struct DisplayItem {
@@ -143,6 +165,8 @@ private:
 
     void DrawEmpty(Renderer& r, Ui& ui, const D2D1_RECT_F& area, ShellHost& host);
     void DrawToolbar(Renderer& r, Ui& ui, const D2D1_RECT_F& rc, Settings& set, Library& lib, ShellHost& host, double now);
+    void DrawSubListBar(Renderer& r, Ui& ui, const D2D1_RECT_F& rc, Settings& set, Library& lib, ShellHost& host);
+    void DrawSubListModal(Renderer& r, Ui& ui, const D2D1_RECT_F& area, Settings& set, Library& lib, ShellHost& host, double now);
     void DrawSeriesList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, Settings& set, Library& lib, ShellHost& host);
     void DrawCardGrid(Renderer& r, Ui& ui, const D2D1_RECT_F& list, Settings& set, Library& lib, ShellHost& host);
     void DrawLocalList(Renderer& r, Ui& ui, const D2D1_RECT_F& list, const std::vector<std::wstring>& recent,
@@ -277,6 +301,21 @@ private:
 
     // Cift Onayli Kutuphane Sifirlama Modali (1. Onay -> 2. Onay)
     int m_resetConfirmStep = 0; // 0: Kapali, 1: Ilk Onay, 2: Ikinci ve Son Onay
+
+    // Sinirsiz Kullanici Alt Listeleri (Sub-Lists) Filtre ve Yonetim Durumu
+    std::string m_activeSubList;
+    std::string m_lastActiveSubList;
+    float m_subListBarScroll = 0.0f;
+    float m_subListBarMaxScroll = 0.0f;
+    bool m_hoverSubListBar = false;
+    int m_subListModalMode = 0; // 0: Kapali, 1: Olustur, 2: Adlandir, 3: Silme Onayi
+    bool m_subListSubmitPending = false;
+    w::TextInput m_subListInput;
+    w::TextInput m_cardSubListInput;
+    bool m_cardSubListSubmitPending = false;
+    float m_cardSubListsScroll = 0.0f;
+    float m_cardSubListsMaxScroll = 0.0f;
+    int m_cardSubListPrevMode = 0;
 
     // Guncelleme Hatasi Alan Seriler (Key -> Hata Mesaji)
     mutable std::mutex m_updateErrMutex;

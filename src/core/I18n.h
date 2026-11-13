@@ -149,7 +149,7 @@ namespace gm {
     X(NotInstalled,     L"kurulu değil",                        L"not installed") \
     X(WebView2Note,     L"Robot kontrolü ve Turnstile doğrulamasını arka planda çözer.", L"Solves bot checks and Turnstile challenges in the background.") \
     X(VersionLabel,     L"Sürüm",                               L"Version") \
-    X(VersionValue,     L"1.0.0 · Tam Sürüm & Çevrimdışı",       L"1.0.0 · Full Engine & Offline") \
+    X(VersionValue,     L"1.0.1 · Tam Sürüm & Çevrimdışı",       L"1.0.1 · Full Engine & Offline") \
     X(StackLabel,       L"Yığın",                               L"Stack") \
     X(StackValue,       L"Saf Win32 · D3D11 · DirectComposition · Direct2D · WIC", L"Pure Win32 · D3D11 · DirectComposition · Direct2D · WIC") \
     X(PrivacyLabel,     L"Gizlilik",                            L"Privacy") \

@@ -167,6 +167,13 @@ int main(int argc,char** argv) {
  Library restored; restored.Load(path); assert(!restored.FindSeries(series[1].key)->lastUpdateError.empty());
  assert(library.StoreChapters(series[0].key,library.FindSeries(series[0].key)->chapters)); rebuild();
  assert(!LibraryViewTestAccess::Items(view)[0].updateFailed && !LibraryViewTestAccess::Items(view)[0].caughtUp);
+ // Custom sub-lists filter LibraryView items and auto-reset when removed.
+ assert(library.AddCustomList("VIP")); assert(library.AddCustomList("EmptyList"));
+ view.SetActiveSubList("EmptyList"); rebuild(); assert(LibraryViewTestAccess::Items(view).empty());
+ assert(library.SetSeriesSubList(series[0].key,"VIP",true));
+ view.SetActiveSubList("VIP"); rebuild(); assert(LibraryViewTestAccess::Items(view).size()==1);
+ assert(library.DeleteCustomList("VIP")); assert(library.DeleteCustomList("EmptyList"));
+ rebuild(); assert(view.ActiveSubList().empty() && LibraryViewTestAccess::Items(view).size()==4);
  // All seven source buttons must be actionable, including wrapped sources.
  Library searchLibrary; const auto searchPath=paths::Join(paths::DataDir(),L"ui-search-library.json"); DeleteFileW(searchPath.c_str()); DeleteFileW((searchPath+L".bak").c_str()); searchLibrary.Load(searchPath);
  TestHost host(searchLibrary); LibraryView searchView;
@@ -327,7 +334,7 @@ int main(int argc,char** argv) {
  globalThis.__searchManga=async function(name,query){await new Promise(resolve=>setTimeout(resolve,query==='Cancelled'?500:30));return [{title:query,url:'https://fixture.invalid/'+query}];};
  globalThis.__getChapters=async function(){await new Promise(resolve=>setTimeout(resolve,20));return [{title:'Chapter 1',url:'https://fixture.invalid/chapter/1'}];};
  globalThis.__getChapterImages=async function(){await new Promise(resolve=>setTimeout(resolve,20));return ['https://fixture.invalid/page/1.png'];};
- )JS","<search-session-fixture>");assert(!JS_IsException(fixture));JS_FreeValue(js.Ctx(),fixture);};installSearchFixture();
+ )JS","<search-session-fixture>");assert(!JS_IsException(fixture));JS_FreeValue(js.Ctx(),fixture);};installSearchFixture();mirrors.RefreshMirrors();
  assert(mirrors.GetMirrors().size()==3);
  LibraryView siteView;Settings siteSettings;TestHost siteHost(library);
  LibraryViewTestAccess::SitesFilter(siteView,siteSettings,false);assert(LibraryViewTestAccess::SitesCount(siteView)==3);

@@ -90,7 +90,7 @@ public:
     };
     // Ayni anahtarli seri varsa dosyadaki durum kazanir, kategoriler birlesir.
     // Durum tasimayan kayit (paylasim kipi) mevcut ilerlemeye dokunmaz.
-    MergeResult Merge(std::vector<Series>&& series, std::vector<Bookmark>&& bookmarks);
+    MergeResult Merge(std::vector<Series>&& series, std::vector<Bookmark>&& bookmarks, std::vector<std::string> customLists = {});
 
     // Seriyi son okunan olarak isaretler, zamani guncelleyip kaydeder.
     bool MarkLastRead(const std::string& key, const std::string& readChapUrl = "", const std::string& readChapName = "");
@@ -130,6 +130,16 @@ public:
     // Kategori sayilari (Yeni, Okunmamis, Tek atimlik)
     void GetStandardCategoryCounts(int& newCount, int& unreadCount, int& oneshotCount) const;
 
+    // Sinirsiz kullanici alt listeleri (gruplama / koleksiyonlar)
+    const std::vector<std::string>& CustomLists() const { return m_customLists; }
+    bool AddCustomList(const std::string& name);
+    bool RenameCustomList(const std::string& oldName, const std::string& newName);
+    bool DeleteCustomList(const std::string& name);
+    bool SetSeriesSubList(const std::string& key, const std::string& listName, bool inList);
+    bool SetGroupSubList(const std::vector<std::string>& keys, const std::string& listName, bool inList);
+    bool SeriesHasSubList(const std::string& key, const std::string& listName) const;
+    int CountSeriesInSubList(const std::string& listName) const;
+
     const std::vector<Series>& All() const { return m_series; }
     const std::vector<Bookmark>& Bookmarks() const { return m_bookmarks; }
     uint32_t Revision() const { return m_rev; }       // her degisiklikte artar
@@ -140,11 +150,13 @@ public:
 private:
     bool ParseInto(const std::string& text);
     bool CommitSeries(size_t index, Series previous);
+    void SyncCustomListsFromSeries();
 
     std::wstring m_path;
     std::wstring m_aside;
     std::vector<Series> m_series;
     std::vector<Bookmark> m_bookmarks;
+    std::vector<std::string> m_customLists;
     uint32_t m_rev = 1;
     bool m_saveBlocked = false;
     LoadNote m_note = LoadNote::None;

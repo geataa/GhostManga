@@ -1,4 +1,5 @@
 #include "engine/Library.h"
+#include "engine/AmrImport.h"
 #include "core/FileIo.h"
 #include "core/Paths.h"
 #include <cassert>
@@ -117,6 +118,66 @@ int main() {
     assert(lib.RemoveSeries("https://tcbscans.com/manga/one-piece"));
     assert(lib.All().size() == 2);
     std::cout << "Removed One Piece by URL. Remaining series: " << lib.All().size() << "\n";
+
+    // Test Unlimited Custom Sub-Lists: create empty lists, persist across reload, group assign, rename, delete, AMR export roundtrip
+    assert(lib.AddCustomList("  Favoriler  "));
+    assert(lib.AddCustomList("Okunacaklar"));
+    assert(lib.AddCustomList("Manhwa Özel"));
+    assert(!lib.AddCustomList("favoriler")); // case-insensitive duplicate guard
+    assert(lib.CountSeriesInSubList("Favoriler") == 0);
+
+    // Reload and verify empty custom sub-lists survive Save/Load
+    {
+        Library reloaded;
+        reloaded.Load(testDb);
+        bool hasFav = false, hasPlan = false, hasManhwa = false;
+        for (const auto& cl : reloaded.CustomLists()) {
+            if (cl == "Favoriler") hasFav = true;
+            if (cl == "Okunacaklar") hasPlan = true;
+            if (cl == "Manhwa Özel") hasManhwa = true;
+        }
+        assert(hasFav && hasPlan && hasManhwa);
+    }
+
+    // Group assign both remaining series to "Favoriler"
+    std::string soloKey, jjkKey;
+    for (const auto& s : lib.All()) {
+        if (s.name == "Solo & Leveling") soloKey = s.key;
+        if (s.name == "Jujutsu & Kaisen") jjkKey = s.key;
+    }
+    assert(!soloKey.empty() && !jjkKey.empty());
+    std::vector<std::string> groupKeys = { soloKey, jjkKey };
+    assert(lib.SetGroupSubList(groupKeys, "Favoriler", true));
+    assert(lib.CountSeriesInSubList("Favoriler") == 2);
+    assert(lib.SeriesHasSubList(soloKey, "Favoriler"));
+    assert(lib.SeriesHasSubList(jjkKey, "Favoriler"));
+
+    // Rename "Favoriler" -> "Top Favoriler" and verify series tags migrate
+    assert(lib.RenameCustomList("Favoriler", "Top Favoriler"));
+    assert(lib.CountSeriesInSubList("Favoriler") == 0);
+    assert(lib.CountSeriesInSubList("Top Favoriler") == 2);
+    assert(lib.SeriesHasSubList(soloKey, "Top Favoriler"));
+
+    // Export AMR backup and verify customLists (including empty "Okunacaklar") survive roundtrip
+    std::wstring expPath = L"tests_temp_amr_sublists.json";
+    DeleteFileW(expPath.c_str());
+    assert(amr::ExportAmrFile(expPath, lib));
+    {
+        amr::ImportData imp;
+        assert(amr::LoadExportFile(expPath, imp) == amr::ImportError::None);
+        bool foundEmptyPlan = false;
+        for (const auto& cl : imp.customLists) {
+            if (cl == "Okunacaklar") foundEmptyPlan = true;
+        }
+        assert(foundEmptyPlan);
+    }
+    DeleteFileW(expPath.c_str());
+
+    // Delete "Top Favoriler": series remain in main library, only sub-list membership is removed
+    assert(lib.DeleteCustomList("Top Favoriler"));
+    assert(lib.All().size() == 2);
+    assert(!lib.SeriesHasSubList(soloKey, "Top Favoriler"));
+    std::cout << "Custom Sub-Lists create, persist, group-assign, rename, export, and non-destructive delete verified!\n";
 
     // Clean up
     DeleteFileW(testDb.c_str());

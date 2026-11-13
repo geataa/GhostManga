@@ -477,52 +477,15 @@ bool MirrorEngine::Init() {
     }
     m_initialized = true;
     if (m_cachedMirrorsCount.load(std::memory_order_acquire) == 0 && m_cachedMirrors.empty()) {
-        JSValue global = JS_GetGlobalObject(m_engine.Ctx());
-        JSValue fn = JS_GetPropertyStr(m_engine.Ctx(), global, "__getAllMirrors");
-        JS_FreeValue(m_engine.Ctx(), global);
-        if (JS_IsFunction(m_engine.Ctx(), fn)) {
-            JSValue res = m_engine.Call(fn, JS_UNDEFINED, 0, nullptr);
-            JS_FreeValue(m_engine.Ctx(), fn);
-            std::string jsonStr = m_engine.ToJson(res);
-            JS_FreeValue(m_engine.Ctx(), res);
-            json::Value v;
-            std::string err;
-            if (json::Parse(jsonStr, v, &err) && v.IsArray()) {
-                for (const auto& item : v.arr) {
-                    if (!item.IsObject()) continue;
-                    MirrorInfo info;
-                    if (const auto* n = item.Get("name")) info.name = n->AsString();
-                    if (const auto* l = item.Get("language")) info.language = l->AsString();
-                    if (const auto* h = item.Get("home")) info.home = h->AsString();
-                    if (const auto* h = item.Get("imageReferer")) info.imageReferer = h->AsString();
-                    if (const auto* c = item.Get("canListFullMangas")) info.canListFullMangas = c->AsBool();
-                    if (const auto* d = item.Get("disabled")) info.disabled = d->AsBool();
-                    if (const auto* i = item.Get("iconDataUrl")) info.iconDataUrl = i->AsString();
-                    if (const auto* dom = item.Get("domains")) {
-                        if (dom->IsArray()) {
-                            for (const auto& di : dom->arr) info.domains.push_back(di.AsString());
-                        }
-                    }
-                    m_cachedMirrors.push_back(std::move(info));
-                }
-            }
-            m_cachedMirrorsCount.store(m_cachedMirrors.size(), std::memory_order_release);
-        } else {
-            JS_FreeValue(m_engine.Ctx(), fn);
-        }
+        RefreshMirrors();
     }
     log::Write(L"MirrorEngine basariyla baslatildi.");
     return true;
 }
 
-const std::vector<MirrorInfo>& MirrorEngine::GetMirrors() {
-    static const std::vector<MirrorInfo> s_empty;
-    if (m_cachedMirrorsCount.load(std::memory_order_acquire) > 0 && !m_cachedMirrors.empty()) {
-        return m_cachedMirrors;
-    }
+void MirrorEngine::RefreshMirrors() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (!m_initialized && !Init()) return s_empty;
-    if (!m_cachedMirrors.empty()) return m_cachedMirrors;
+    if (!m_initialized && !Init()) return;
 
     JSValue global = JS_GetGlobalObject(m_engine.Ctx());
     JSValue fn = JS_GetPropertyStr(m_engine.Ctx(), global, "__getAllMirrors");
@@ -530,7 +493,7 @@ const std::vector<MirrorInfo>& MirrorEngine::GetMirrors() {
 
     if (!JS_IsFunction(m_engine.Ctx(), fn)) {
         JS_FreeValue(m_engine.Ctx(), fn);
-        return s_empty;
+        return;
     }
 
     JSValue res = m_engine.Call(fn, JS_UNDEFINED, 0, nullptr);
@@ -539,6 +502,7 @@ const std::vector<MirrorInfo>& MirrorEngine::GetMirrors() {
     std::string jsonStr = m_engine.ToJson(res);
     JS_FreeValue(m_engine.Ctx(), res);
 
+    std::vector<MirrorInfo> parsed;
     json::Value v;
     std::string err;
     if (json::Parse(jsonStr, v, &err) && v.IsArray()) {
@@ -557,11 +521,23 @@ const std::vector<MirrorInfo>& MirrorEngine::GetMirrors() {
                     for (const auto& di : dom->arr) info.domains.push_back(di.AsString());
                 }
             }
-            m_cachedMirrors.push_back(std::move(info));
+            parsed.push_back(std::move(info));
         }
     }
 
+    m_cachedMirrors = std::move(parsed);
     m_cachedMirrorsCount.store(m_cachedMirrors.size(), std::memory_order_release);
+}
+
+const std::vector<MirrorInfo>& MirrorEngine::GetMirrors() {
+    static const std::vector<MirrorInfo> s_empty;
+    if (m_cachedMirrorsCount.load(std::memory_order_acquire) > 0 && !m_cachedMirrors.empty()) {
+        return m_cachedMirrors;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (!m_initialized && !Init()) return s_empty;
+    if (!m_cachedMirrors.empty()) return m_cachedMirrors;
+    RefreshMirrors();
     log::Write(L"Yuklenen ayna sayisi: %zu", m_cachedMirrors.size());
     return m_cachedMirrors;
 }
